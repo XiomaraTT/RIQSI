@@ -220,6 +220,7 @@ class AppState extends ChangeNotifier {
       _connectWebSocket();
     } else {
       _disconnectWebSocket();
+      _vibrationRepository.stop(); // Detener vibración en bucle
       assistanceState = AssistanceState.inactive;
       currentStatusMessage = "Riqsi está listo";
       activeDetection = null;
@@ -274,6 +275,13 @@ class AppState extends ChangeNotifier {
 
   void _handleDetectionEvent(DetectionEvent event) {
     isConnected = true;
+
+    if (vibrationEnabled) {
+      _vibrationRepository.triggerProximityFeedback(event.distancia);
+    } else {
+      _vibrationRepository.stop();
+    }
+
     if (event.riskLevel == "Alto") {
       triggerHighRiskAlert(event);
     } else {
@@ -284,12 +292,15 @@ class AppState extends ChangeNotifier {
   void triggerObjectDetection(DetectionEvent event) {
     assistanceState = AssistanceState.objectDetected;
     currentStatusMessage = "${event.label} detectado";
-    
     activeDetection = event;
+
     _addHistory.execute(event).then((_) => _refreshHistory());
-    speak(event.description);
-    vibrate(200);
-    
+
+    // Solo hablar si detector.py indicó anunciar voz
+    if (event.announceVoice && event.description.isNotEmpty) {
+      speak(event.description);
+    }
+
     Timer(const Duration(seconds: 4), () {
       if (assistanceState == AssistanceState.objectDetected && activeDetection?.id == event.id) {
         assistanceState = AssistanceState.analyzing;
@@ -298,26 +309,24 @@ class AppState extends ChangeNotifier {
         notifyListeners();
       }
     });
-    
+
     notifyListeners();
   }
 
   void triggerHighRiskAlert(DetectionEvent event) {
-    if (assistanceState == AssistanceState.riskDetected && activeDetection?.description == event.description) {
-      return;
-    }
     assistanceState = AssistanceState.riskDetected;
     currentStatusMessage = "¡Cuidado! Peligro detectado";
-    
     activeDetection = event;
+
     _addHistory.execute(event).then((_) => _refreshHistory());
-    
-    speak(event.description);
-    vibrate(600); // Heavy warning pulse
-    
+
+    // Solo hablar si detector.py indicó anunciar voz
+    if (event.announceVoice && event.description.isNotEmpty) {
+      speak(event.description);
+    }
+
     notifyListeners();
 
-    // Auto-dismiss after 4.5 seconds to return to scanning state without user intervention
     Timer(const Duration(milliseconds: 4500), () {
       if (assistanceState == AssistanceState.riskDetected && activeDetection?.id == event.id) {
         assistanceState = AssistanceState.analyzing;

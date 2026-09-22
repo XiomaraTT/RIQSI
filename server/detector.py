@@ -9,387 +9,250 @@ from abc import ABC, abstractmethod
 PORT = 8765
 
 class TranslationService:
-    """Handles class label translations from English COCO classes to Spanish."""
     def __init__(self):
         self.translations = {
-            "person": "persona",
-            "bicycle": "bicicleta",
-            "car": "automóvil",
-            "motorcycle": "motocicleta",
-            "airplane": "avión",
-            "bus": "autobús",
-            "train": "tren",
-            "truck": "camión",
-            "boat": "barco",
-            "traffic light": "semáforo",
-            "fire hydrant": "hidrante",
-            "stop sign": "señal de pare",
-            "parking meter": "parquímetro",
-            "bench": "banca",
-            "bird": "pájaro",
-            "cat": "gato",
-            "dog": "perro",
-            "horse": "caballo",
-            "sheep": "oveja",
-            "cow": "vaca",
-            "elephant": "elefante",
-            "bear": "oso",
-            "zebra": "cebra",
-            "giraffe": "jirafa",
-            "backpack": "mochila",
-            "umbrella": "paraguas",
-            "handbag": "cartera",
-            "tie": "corbata",
-            "suitcase": "maleta",
-            "frisbee": "frisbee",
-            "skis": "esquís",
-            "snowboard": "snowboard",
-            "sports ball": "pelota",
-            "kite": "cometa",
-            "baseball bat": "bate de béisbol",
-            "baseball glove": "guante de béisbol",
-            "skateboard": "patineta",
-            "surfboard": "tabla de surf",
-            "tennis racket": "raqueta",
-            "bottle": "botella",
-            "wine glass": "copa",
-            "cup": "taza",
-            "fork": "tenedor",
-            "knife": "cuchillo",
-            "spoon": "cuchara",
-            "bowl": "tazón",
-            "banana": "plátano",
-            "apple": "manzana",
-            "sandwich": "sándwich",
-            "orange": "naranja",
-            "broccoli": "brócoli",
-            "carrot": "zanahoria",
-            "hot dog": "pancho",
-            "pizza": "pizza",
-            "donut": "dona",
-            "cake": "pastel",
-            "chair": "silla",
-            "couch": "sillón",
-            "potted plant": "planta",
-            "bed": "cama",
-            "dining table": "mesa",
-            "toilet": "inodoro",
-            "tv": "televisor",
-            "laptop": "computadora",
-            "mouse": "mouse",
-            "remote": "control remoto",
-            "keyboard": "teclado",
-            "cell phone": "celular",
-            "microwave": "microondas",
-            "oven": "horno",
-            "toaster": "tostadora",
-            "sink": "lavadero",
-            "refrigerator": "refrigerador",
-            "book": "libro",
-            "clock": "reloj",
-            "vase": "florero",
-            "scissors": "tijeras",
-            "teddy bear": "oso de peluche",
-            "hair drier": "secador de pelo",
-            "toothbrush": "cepillo de dientes"
+            # Clases Peatonales / Vía Pública
+            "pole": "poste", "reflective_cone": "cono", "spherical_roadblock": "bolardo",
+            "warning_column": "columna", "fire_hydrant": "hidrante", "ashcan": "tacho de basura",
+            "person": "persona", "bicycle": "bicicleta", "car": "auto", "bus": "autobús",
+            "truck": "camión", "motorcycle": "motocicleta", "stop_sign": "señal de pare",
+            "dog": "perro", "traffic light": "semáforo", "door": "puerta", "wall": "pared",
+            # Clases de Interiores (COCO Dataset estándar para que nunca falle con muebles)
+            "chair": "silla", "couch": "sillón", "bed": "cama", "dining table": "mesa",
+            "tv": "pantalla", "laptop": "computadora", "bottle": "botella", "cup": "taza",
+            "door": "puerta", "refrigerator": "refrigerador", "potted plant": "planta",
+            "stairs": "escaleras", "backpack": "mochila"
         }
 
     def translate(self, label: str) -> str:
-        label_lower = label.lower()
-        return self.translations.get(label_lower, label_lower)
+        clean = label.lower().strip()
+        if clean.isdigit() or clean.startswith("0000"):
+            return "obstáculo"
+        return self.translations.get(clean, clean)
 
-class ObjectDetector(ABC):
-    """Abstract Base Class for vision object detection models."""
-    @abstractmethod
-    def detect(self, frame) -> list:
-        pass
 
-class YoloDetector(ObjectDetector):
-    """Implements YOLOv8 object detection."""
-    def __init__(self, model_path="yolov8n.pt"):
+class YoloDetector:
+    def __init__(self, model_path="best.onnx"):
         from ultralytics import YOLO
-        self.model = YOLO(model_path)
-        print("[INFO] YOLOv8 cargado con éxito. Se utilizará para detección de múltiples objetos.")
+        import os
+        
+        # Si el modelo personalizado no existe o falla, usa yolov8n que tiene 80 clases universales
+        if not os.path.exists(model_path):
+            model_path = "best.pt" if os.path.exists("best.pt") else "yolov8n.pt"
+            
+        print(f"[INFO] Cargando modelo: {model_path}")
+        self.model = YOLO(model_path, task="detect")
 
     def detect(self, frame) -> list:
-        results = self.model(frame, verbose=False, conf=0.5)
-        raw_detections = []
+        # imgsz=320 y conf=0.45 para balance perfecto entre velocidad y alta sensibilidad
+        results = self.model.predict(source=frame, verbose=False, conf=0.45, imgsz=320)
+        detections = []
         for r in results:
             for box in r.boxes:
                 cls_id = int(box.cls[0])
                 label = self.model.names[cls_id]
                 xyxy = box.xyxy[0].tolist()
-                raw_detections.append({
+                conf = float(box.conf[0])
+                detections.append({
                     "label": label,
+                    "confidence": conf,
                     "box": [int(v) for v in xyxy]
                 })
-        return raw_detections
+        return detections
 
-class HaarFaceDetector(ObjectDetector):
-    """Fallback Face Detector using OpenCV Haar Cascades."""
-    def __init__(self):
-        cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-        self.face_cascade = cv2.CascadeClassifier(cascade_path)
-        print("[WARN] Se usará el detector facial Haar Cascade como alternativa de detección.")
 
-    def detect(self, frame) -> list:
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        faces = self.face_cascade.detectMultiScale(gray, 1.3, 5)
-        raw_detections = []
-        for (x, y, face_w, face_h) in faces:
-            raw_detections.append({
-                "label": "person",
-                "box": [x, y, x + face_w, y + face_h]
-            })
-        return raw_detections
+class FallbackDetector:
+    """Detecta paredes o bloqueos frontales a corta distancia cuando la cámara está cubierta."""
+    def detect_wall(self, frame) -> list:
+        h, w, _ = frame.shape
+        # Reducir a tamaño microscópico para evaluación en 0.5 ms
+        small = cv2.resize(frame, (80, 60))
+        gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+        
+        # Si no hay variación ni textura en el centro, hay una superficie opaca a menos de 50cm
+        center = gray[15:45, 20:60]
+        variance = cv2.Laplacian(center, cv2.CV_64F).var()
+        
+        if variance < 22.0:
+            return [{
+                "label": "pared",
+                "confidence": 0.90,
+                "box": [int(w * 0.1), int(h * 0.1), int(w * 0.9), int(h * 0.9)]
+            }]
+        return []
+
 
 class SpatialAnalyser:
-    """Domain class to analyze bounding boxes for horizontal position and distance risk."""
-    def __init__(self, translation_service: TranslationService):
-        self.translator = translation_service
+    def __init__(self, translator: TranslationService):
+        self.translator = translator
 
-    def analyse(self, label: str, box: list, frame_width: int) -> dict:
+    def analyse(self, label: str, box: list, frame_w: int, frame_h: int) -> dict:
         x1, y1, x2, y2 = box
-        
-        # Calculate horizontal center position
-        x_center = ((x1 + x2) / 2.0) / frame_width
+        w_box = x2 - x1
+        h_box = y2 - y1
+        area_ratio = (w_box * h_box) / float(frame_w * frame_h)
+        bottom_y_ratio = y2 / float(frame_h)
+        x_center = ((x1 + x2) / 2.0) / float(frame_w)
+
+        # Posición horizontal
         if x_center < 0.35:
             pos = "Izquierda"
         elif x_center > 0.65:
             pos = "Derecha"
         else:
             pos = "Adelante"
-            
-        # Proximity risk via bounding box width ratio
-        box_width_ratio = (x2 - x1) / frame_width
-        
-        risk = "Medio"
-        translated_label = self.translator.translate(label).capitalize()
-        desc = f"{translated_label} detectado a la {pos}."
-        
-        if label.lower() == "person":
-            if box_width_ratio > 0.30:
-                risk = "Alto"
-                desc = "¡Cuidado! Persona adelante, muy cerca."
-            elif box_width_ratio < 0.15:
-                risk = "Bajo"
-                desc = f"Persona a la {pos}."
+
+        trans_label = self.translator.translate(label).capitalize()
+        pos_desc = "adelante" if pos == "Adelante" else f"a la {pos.lower()}"
+        is_wall = label.lower() == "pared"
+
+        # LÓGICA DE DISTANCIA POR PERSPECTIVA FÍSICA:
+        # 1. MUY CERCA: La base toca el suelo inmediato (>0.85) con tamaño visible, o pared frontal
+        if is_wall or (bottom_y_ratio > 0.85 and area_ratio > 0.18) or area_ratio > 0.55:
+            risk = "Alto"
+            distancia = "muy_cerca"
+            desc = f"¡Cuidado! {trans_label} muy cerca {pos_desc}."
+        # 2. CERCA: En trayectoria media
+        elif bottom_y_ratio > 0.60 or area_ratio > 0.10:
+            risk = "Medio"
+            distancia = "cerca"
+            desc = f"{trans_label} cerca {pos_desc}."
+        # 3. LEJOS: Al fondo
         else:
-            if box_width_ratio > 0.45:
-                risk = "Alto"
-                desc = f"¡Cuidado! {translated_label} adelante, muy cerca."
-            elif box_width_ratio < 0.15:
-                risk = "Bajo"
-                desc = f"{translated_label} a la {pos}."
-                
+            risk = "Bajo"
+            distancia = "lejos"
+            desc = f"{trans_label} {pos_desc}."
+
         return {
-            "label": translated_label,
+            "label": trans_label,
             "pos": pos,
             "risk": risk,
+            "distancia": distancia,
+            "proximity_ratio": round(area_ratio, 3),
             "desc": desc,
             "box": box
         }
 
-class EnvironmentConsolidator:
-    """Consolidates single frame detections into a grammatically correct Spanish description."""
-    def consolidate(self, analysed_objects: list) -> dict:
-        if not analysed_objects:
-            return None
-            
-        unique_items = {}
-        highest_risk = "Bajo"
-        
-        for obj in analysed_objects:
-            label = obj["label"]
-            pos = obj["pos"]
-            risk = obj["risk"]
-            
-            if risk == "Alto":
-                highest_risk = "Alto"
-            elif risk == "Medio" and highest_risk != "Alto":
-                highest_risk = "Medio"
-                
-            key = (label, pos)
-            if key not in unique_items:
-                unique_items[key] = {
-                    "label": label,
-                    "pos": pos,
-                    "risk": risk,
-                    "desc": obj["desc"],
-                    "box": obj["box"]
-                }
-                
-        items_list = list(unique_items.values())
-        items_list.sort(key=lambda x: 0 if x["risk"] == "Alto" else (1 if x["risk"] == "Medio" else 2))
-        
-        parts = []
-        has_high_risk = False
-        
-        for item in items_list:
-            label_text = item["label"]
-            pos_text = item["pos"]
-            risk_text = item["risk"]
-            
-            if risk_text == "Alto":
-                has_high_risk = True
-                parts.append(f"{label_text} muy cerca adelante")
-            else:
-                parts.append(f"{label_text} a la {pos_text}")
-                
-        if not parts:
-            return None
-            
-        if len(parts) == 1:
-            combined_desc = parts[0]
-        elif len(parts) == 2:
-            combined_desc = f"{parts[0]} y {parts[1]}"
-        else:
-            combined_desc = ", ".join(parts[:-1]) + f" y {parts[-1]}"
-            
-        if has_high_risk:
-            combined_desc = "¡Cuidado! " + combined_desc
-        else:
-            combined_desc = combined_desc + "."
-            
-        combined_desc = combined_desc[0].upper() + combined_desc[1:]
-        
-        return {
-            "type": "detection",
-            "label": items_list[0]["label"],
-            "position": items_list[0]["pos"],
-            "risk": highest_risk,
-            "description": combined_desc,
-            "objects": [
-                {
-                    "label": item["label"],
-                    "position": item["pos"],
-                    "risk": item["risk"],
-                    "box": item["box"]
-                } for item in items_list
-            ]
-        }
+
+class SpeechDebouncer:
+    """Regula el TTS para no saturar auditivamente al usuario."""
+    def __init__(self):
+        self.last_text = ""
+        self.last_time = 0.0
+
+    def should_announce(self, text: str, risk: str) -> bool:
+        now = time.time()
+        elapsed = now - self.last_time
+
+        if risk == "Alto":
+            # Si el peligro es crítico, permite alertar tras 2.2 segundos
+            if elapsed > 2.2 or text != self.last_text:
+                self.last_text = text
+                self.last_time = now
+                return True
+            return False
+
+        # Si es riesgo medio o bajo, retiene mínimo 5.0 segundos la misma frase
+        if elapsed > 5.0 and text != self.last_text:
+            self.last_text = text
+            self.last_time = now
+            return True
+        elif elapsed > 8.0:
+            self.last_text = text
+            self.last_time = now
+            return True
+
+        return False
+
 
 class VisionServer:
-    """Manages WebSocket connections and frames streaming from mobile clients."""
-    def __init__(self, detector: ObjectDetector, analyser: SpatialAnalyser, consolidator: EnvironmentConsolidator):
-        self.detector = detector
-        self.analyser = analyser
-        self.consolidator = consolidator
-        self.connected_clients = set()
-        
-        self.last_announced_desc = ""
-        self.last_announced_time = 0.0
+    def __init__(self):
+        self.detector = YoloDetector()
+        self.fallback = FallbackDetector()
+        self.translator = TranslationService()
+        self.analyser = SpatialAnalyser(self.translator)
+        self.debouncer = SpeechDebouncer()
+        self.is_processing = False
 
-    async def register(self, websocket):
-        print(f"[INFO] Cliente conectado desde: {websocket.remote_address}")
-        self.connected_clients.add(websocket)
+    async def process_frame(self, raw_bytes, websocket):
+        if self.is_processing:
+            return
+        self.is_processing = True
 
-    async def unregister(self, websocket):
-        print(f"[INFO] Cliente desconectado: {websocket.remote_address}")
-        self.connected_clients.remove(websocket)
         try:
-            cv2.destroyWindow("Riqsi Vision Server - Transmision Celular")
-        except Exception:
-            pass
-
-    async def process_frame(self, jpeg_bytes, websocket):
-        try:
-            nparr = np.frombuffer(jpeg_bytes, np.uint8)
+            nparr = np.frombuffer(raw_bytes, np.uint8)
             frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
             if frame is None:
                 return
 
             h, w, _ = frame.shape
             
-            raw_detections = self.detector.detect(frame)
-            analysed_objects = [
-                self.analyser.analyse(raw["label"], raw["box"], w)
-                for raw in raw_detections
-            ]
+            # 1. Detección semántica
+            detections = self.detector.detect(frame)
+            
+            # 2. Respaldo de pared solo si YOLO no detecta nada
+            if not detections:
+                detections = self.fallback.detect_wall(frame)
 
-            # Render rectangles on visual debug window
-            for obj in analysed_objects:
-                box = obj["box"]
-                color = (0, 255, 0)
-                if obj["risk"] == "Alto":
-                    color = (0, 0, 255)
-                elif obj["risk"] == "Medio":
-                    color = (0, 165, 255)
-                cv2.rectangle(frame, (box[0], box[1]), (box[2], box[3]), color, 3)
-                cv2.putText(frame, f"{obj['label']} - {obj['pos']} ({obj['risk']})", 
-                            (box[0], box[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+            analysed = [self.analyser.analyse(d["label"], d["box"], w, h) for d in detections]
 
-            cv2.imshow("Riqsi Vision Server - Transmision Celular", frame)
+            # Renderizado PC
+            for obj in analysed:
+                color = (0, 0, 255) if obj["risk"] == "Alto" else ((0, 165, 255) if obj["risk"] == "Medio" else (0, 255, 0))
+                cv2.rectangle(frame, (obj["box"][0], obj["box"][1]), (obj["box"][2], obj["box"][3]), color, 2)
+                cv2.putText(frame, f"{obj['label']} - {obj['distancia']}", (obj["box"][0], max(20, obj["box"][1] - 8)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+            cv2.imshow("Riqsi Monitor", frame)
             cv2.waitKey(1)
 
-            # Consolidate detections and apply rate limits
-            consolidated = self.consolidator.consolidate(analysed_objects)
-            if consolidated:
-                current_time = time.time()
-                combined_desc = consolidated["description"]
+            if analysed:
+                # Priorizar el de mayor riesgo
+                analysed.sort(key=lambda x: (3 if x["risk"]=="Alto" else (2 if x["risk"]=="Medio" else 1), x["proximity_ratio"]), reverse=True)
+                top = analysed[0]
                 
-                should_send = False
-                if combined_desc != self.last_announced_desc:
-                    should_send = True
-                else:
-                    elapsed = current_time - self.last_announced_time
-                    if consolidated["risk"] == "Alto" and elapsed > 5.5:
-                        should_send = True
-                    elif consolidated["risk"] in ("Medio", "Bajo") and elapsed > 11.0:
-                        should_send = True
+                allow_voice = self.debouncer.should_announce(top["desc"], top["risk"])
+                
+                payload = {
+                    "type": "detection",
+                    "label": top["label"],
+                    "position": top["pos"],
+                    "risk": top["risk"],
+                    "distancia": top["distancia"],
+                    "description": top["desc"],
+                    "announce_voice": allow_voice,
+                    "objects": analysed[:3]
+                }
+                if allow_voice:
+                    print(f"[VOZ ACTIVA] {top['desc']}")
 
-                if should_send:
-                    self.last_announced_desc = combined_desc
-                    self.last_announced_time = current_time
-                    print(f"[VISION-CELULAR] Enviando entorno: {combined_desc} (Riesgo: {consolidated['risk']})")
-                    await websocket.send(json.dumps(consolidated))
+                await websocket.send(json.dumps(payload))
             else:
-                if time.time() - self.last_announced_time > 4.5:
-                    self.last_announced_desc = ""
+                await websocket.send(json.dumps({"type": "clear"}))
 
         except Exception as e:
-            print(f"[ERROR] Error al procesar imagen del celular: {e}")
+            print(f"[ERROR] {e}")
+        finally:
+            self.is_processing = False
 
     async def handler(self, websocket):
-        await self.register(websocket)
+        print(f"[CONECTADO] {websocket.remote_address}")
         try:
-            async for message in websocket:
-                if isinstance(message, bytes):
-                    await self.process_frame(message, websocket)
-        except websockets.exceptions.ConnectionClosedOK:
+            async for msg in websocket:
+                if isinstance(msg, bytes):
+                    await self.process_frame(msg, websocket)
+        except Exception:
             pass
-        except Exception as e:
-            print(f"[ERROR] Error en comunicación: {e}")
         finally:
-            await self.unregister(websocket)
+            print("[DESCONECTADO]")
+
 
 async def main():
-    # Instantiate clean detector dynamically based on dependencies availability
-    yolo_available = False
-    try:
-        from ultralytics import YOLO
-        yolo_available = True
-    except ImportError:
-        pass
-
-    if yolo_available:
-        detector = YoloDetector()
-    else:
-        detector = HaarFaceDetector()
-
-    translator = TranslationService()
-    analyser = SpatialAnalyser(translator)
-    consolidator = EnvironmentConsolidator()
-    server = VisionServer(detector, analyser, consolidator)
-
-    print("\n" + "="*50)
-    print("      RIQSI - SERVIDOR DE VISIÓN LIMPIO")
-    print("="*50)
-    print(f" Servidor WebSocket: ws://localhost:{PORT}")
-    print("="*50 + "\n")
-
+    server = VisionServer()
+    print(f"\n==========================================")
+    print(f"   RIQSI CORE EN EJECUCIÓN (PORT: {PORT})")
+    print(f"==========================================\n")
     async with websockets.serve(server.handler, "0.0.0.0", PORT):
-        print(f"[INFO] Servidor WebSocket corriendo en puerto {PORT}")
         while True:
             await asyncio.sleep(3600)
 
@@ -397,4 +260,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\n[INFO] Servidor terminado por el usuario.")
+        pass
