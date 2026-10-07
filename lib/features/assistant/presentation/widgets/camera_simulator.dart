@@ -3,148 +3,169 @@ import 'package:camera/camera.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
-import 'package:path_provider/path_provider.dart';
 import '../../../../core/theme/riqsi_theme.dart';
 import '../../../../state/app_state.dart';
 
 class CameraSimulator extends StatefulWidget {
   final AppState state;
+  final bool isUltraWide;
 
-  const CameraSimulator({super.key, required this.state});
+  const CameraSimulator({
+    super.key,
+    required this.state,
+    this.isUltraWide = true,
+  });
 
   @override
   State<CameraSimulator> createState() => _CameraSimulatorState();
 }
 
-class _CameraSimulatorState extends State<CameraSimulator> with SingleTickerProviderStateMixin {
-  late AnimationController _scanController;
-  late Animation<double> _scanAnimation;
-  
+class _CameraSimulatorState extends State<CameraSimulator> {
   CameraController? _cameraController;
   List<CameraDescription>? _cameras;
+  CameraDescription? _ultraWideCamera;
+  CameraDescription? _mainCamera;
+  CameraDescription? _activeCamera;
   bool _isCameraInitialized = false;
-  
-  Timer? _frameTimer;
-  bool _isCapturing = false;
+  bool _isLoopRunning = false;
 
   @override
   void initState() {
     super.initState();
-    _scanController = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 3),
-    )..repeat(reverse: true);
-
-    _scanAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(parent: _scanController, curve: Curves.easeInOut),
-    );
-
-    _initializeCamera();
+    _initializeCameras();
   }
 
-  Future<void> _initializeCamera() async {
+  @override
+  void didUpdateWidget(CameraSimulator oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.isUltraWide != widget.isUltraWide && _cameras != null) {
+      final target = widget.isUltraWide ? _ultraWideCamera : _mainCamera;
+      if (target != null && target != _activeCamera) {
+        _applyCamera(target);
+      }
+    }
+  }
+
+  Future<void> _initializeCameras() async {
     try {
       _cameras = await availableCameras();
       if (_cameras != null && _cameras!.isNotEmpty) {
-        final backCamera = _cameras!.firstWhere(
-          (camera) => camera.lensDirection == CameraLensDirection.back,
-          orElse: () => _cameras!.first,
-        );
+        final backCameras = _cameras!
+            .where((camera) => camera.lensDirection == CameraLensDirection.back)
+            .toList();
 
-        _cameraController = CameraController(
-          backCamera,
-          ResolutionPreset.medium,
-          enableAudio: false,
-        );
-
-        await _cameraController!.initialize();
-        if (mounted) {
-          setState(() {
-            _isCameraInitialized = true;
-          });
+        for (final cam in _cameras!) {
+          debugPrint("[CAMERA] Dispositivo: id=${cam.name}, facing=${cam.lensDirection}");
         }
-      } else {
-        print("[CAMERA] No hay cámaras físicas disponibles.");
-      }
-    } catch (e) {
-      print("[CAMERA] Error de inicialización: $e");
-    }
-  }
 
-  Future<Uint8List?> _getLastCapturedImageFromCache() async {
-    try {
-      final tempDir = await getTemporaryDirectory();
-      final List<FileSystemEntity> files = tempDir.listSync();
-      
-      final jpgFiles = files.whereType<File>().where((file) {
-        final name = file.path.split(Platform.pathSeparator).last;
-        return name.startsWith('CAP') && name.endsWith('.jpg');
-      }).toList();
-      
-      if (jpgFiles.isEmpty) return null;
-      
-      jpgFiles.sort((a, b) => b.lastModifiedSync().compareTo(a.lastModifiedSync()));
-      final newestFile = jpgFiles.first;
-      
-      final diff = DateTime.now().difference(newestFile.lastModifiedSync());
-      if (diff.inSeconds < 5) {
-        return await newestFile.readAsBytes();
-      }
-    } catch (e) {
-      print("[CAMERA] Error al recuperar imagen del cache: $e");
-    }
-    return null;
-  }
-
-  void _startFrameSending() {
-    _frameTimer?.cancel();
-    _frameTimer = Timer.periodic(const Duration(milliseconds: 800), (timer) async {
-      final status = widget.state.assistanceState;
-      final isScanning = status != AssistanceState.inactive;
-      
-      if (!isScanning || !_isCameraInitialized || _cameraController == null || !_cameraController!.value.isInitialized) {
-        return;
-      }
-      
-      if (!widget.state.isConnected) {
-        return;
-      }
-
-      if (_isCapturing) return;
-
-      try {
-        _isCapturing = true;
-        
-        Uint8List? bytes;
+        // 1. Identificar lente Ultra-Wide (0.5x, 123° FOV, focal ~1.42mm)
+        // En Samsung Galaxy A33 5G, Camera ID 2 o 58 corresponde al sensor ultra-gran angular.
         try {
-          final XFile file = await _cameraController!.takePicture();
-          bytes = await file.readAsBytes();
-        } catch (e) {
-          print("[CAMERA] Falló takePicture (Exif bug). Intentando recuperar del cache...");
-          bytes = await _getLastCapturedImageFromCache();
-          if (bytes == null) {
-            rethrow;
+          _ultraWideCamera = backCameras.firstWhere(
+            (c) => c.name == '2' || c.name == '58',
+          );
+        } catch (_) {
+          if (backCameras.length > 1) {
+            _ultraWideCamera = backCameras[1];
           }
         }
-        
-        widget.state.sendFrameBytes(bytes);
-      } catch (e) {
-        print("[CAMERA] Error de captura de frame: $e");
-      } finally {
-        _isCapturing = false;
+        _ultraWideCamera ??= (backCameras.isNotEmpty ? backCameras.first : _cameras!.first);
+
+        // 2. Identificar lente Principal (1.0x Wide, focal ~4.65mm)
+        try {
+          _mainCamera = backCameras.firstWhere(
+            (c) => c.name == '0' || c.name == '23',
+          );
+        } catch (_) {
+          _mainCamera = backCameras.isNotEmpty ? backCameras.first : _cameras!.first;
+        }
+
+        debugPrint("[CAMERA] Configurado Ultra-Wide: ${_ultraWideCamera?.name}, Principal: ${_mainCamera?.name}");
+
+        final target = widget.isUltraWide ? _ultraWideCamera : _mainCamera;
+        await _applyCamera(target ?? _cameras!.first);
       }
-    });
+    } catch (e) {
+      debugPrint("[CAMERA] Error de inicialización: $e");
+    }
   }
 
-  void _stopFrameSending() {
-    _frameTimer?.cancel();
-    _frameTimer = null;
+  Future<void> _applyCamera(CameraDescription camera) async {
+    if (mounted) {
+      setState(() {
+        _isCameraInitialized = false;
+      });
+    }
+
+    final oldController = _cameraController;
+    _cameraController = null;
+    await oldController?.dispose();
+
+    _activeCamera = camera;
+    debugPrint("[CAMERA] Inicializando sensor cámara ID: ${camera.name}...");
+
+    final controller = CameraController(
+      camera,
+      ResolutionPreset.medium,
+      enableAudio: false,
+    );
+
+    _cameraController = controller;
+    await controller.initialize();
+
+    // Configurar zoom mínimo nativo para asegurar la máxima amplitud angular
+    try {
+      final double minZoom = await controller.getMinZoomLevel();
+      final double maxZoom = await controller.getMaxZoomLevel();
+      debugPrint("[CAMERA ${camera.name}] Zoom soportado: min=$minZoom, max=$maxZoom");
+      await controller.setZoomLevel(minZoom);
+    } catch (ze) {
+      debugPrint("[CAMERA ${camera.name}] Zoom note: $ze");
+    }
+
+    if (mounted) {
+      setState(() {
+        _isCameraInitialized = true;
+      });
+    }
+  }
+
+  void _startFastTransmission() async {
+    if (_isLoopRunning) return;
+    _isLoopRunning = true;
+
+    while (mounted && _isLoopRunning) {
+      final status = widget.state.assistanceState;
+      final isScanning = status != AssistanceState.inactive;
+
+      if (!isScanning ||
+          !widget.state.isConnected ||
+          _cameraController == null ||
+          !_cameraController!.value.isInitialized ||
+          _cameraController!.value.isTakingPicture) {
+        await Future.delayed(const Duration(milliseconds: 35));
+        continue;
+      }
+
+      try {
+        final XFile file = await _cameraController!.takePicture();
+        final Uint8List bytes = await file.readAsBytes();
+        File(file.path).delete().ignore();
+
+        widget.state.sendFrameBytes(bytes);
+
+        // Control de ritmo para evitar saturación del buffer en Android
+        await Future.delayed(const Duration(milliseconds: 20));
+      } catch (e) {
+        await Future.delayed(const Duration(milliseconds: 50));
+      }
+    }
+    _isLoopRunning = false;
   }
 
   @override
   void dispose() {
-    _stopFrameSending();
-    _scanController.dispose();
+    _isLoopRunning = false;
     _cameraController?.dispose();
     super.dispose();
   }
@@ -155,15 +176,17 @@ class _CameraSimulatorState extends State<CameraSimulator> with SingleTickerProv
     final isScanning = status != AssistanceState.inactive;
 
     if (isScanning && widget.state.isConnected) {
-      if (_frameTimer == null) {
-        _startFrameSending();
+      if (!_isLoopRunning && _isCameraInitialized) {
+        _startFastTransmission();
       }
     } else {
-      _stopFrameSending();
+      _isLoopRunning = false;
     }
 
     Widget cameraContent;
-    if (isScanning && _isCameraInitialized && _cameraController != null && _cameraController!.value.isInitialized) {
+    if (_isCameraInitialized &&
+        _cameraController != null &&
+        _cameraController!.value.isInitialized) {
       cameraContent = ClipRect(
         child: FittedBox(
           fit: BoxFit.cover,
@@ -175,420 +198,149 @@ class _CameraSimulatorState extends State<CameraSimulator> with SingleTickerProv
         ),
       );
     } else {
-      cameraContent = _buildCameraBackground(status);
-    }
-
-    return Center(
-      child: AspectRatio(
-        aspectRatio: 3 / 4,
-        child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-            child: Container(
-              decoration: BoxDecoration(
-                color: Colors.black,
-                borderRadius: BorderRadius.circular(24),
-                border: Border.all(
-                  color: status == AssistanceState.riskDetected
-                      ? RiqsiTheme.alertHigh
-                      : (status == AssistanceState.objectDetected
-                          ? RiqsiTheme.accentCyan
-                          : RiqsiTheme.textSecondary.withOpacity(0.2)),
-                  width: 3,
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: status == AssistanceState.riskDetected
-                        ? RiqsiTheme.alertHigh.withOpacity(0.25)
-                        : Colors.black45,
-                    blurRadius: 15,
-                    spreadRadius: 2,
-                  )
-                ],
-              ),
-              clipBehavior: Clip.antiAlias,
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  cameraContent,
-
-                  if (!isScanning)
-                    _buildInactiveOverlay()
-                  else ...[
-                    AnimatedBuilder(
-                      animation: _scanAnimation,
-                      builder: (context, child) {
-                        return Positioned(
-                          top: _scanAnimation.value * (MediaQuery.of(context).size.height * 0.45),
-                          left: 0,
-                          right: 0,
-                          child: Container(
-                            height: 4,
-                            decoration: BoxDecoration(
-                              boxShadow: [
-                                BoxShadow(
-                                  color: status == AssistanceState.riskDetected
-                                      ? RiqsiTheme.alertHigh
-                                      : RiqsiTheme.accentCyan,
-                                  blurRadius: 8,
-                                  spreadRadius: 2,
-                                )
-                              ],
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                    if (widget.state.activeDetection != null) ...[
-                      if (widget.state.activeDetection!.objects.isNotEmpty)
-                        ...widget.state.activeDetection!.objects.map((obj) => _buildIndividualObjectBox(obj))
-                      else
-                        _buildDetectionBoundingBox(widget.state.activeDetection!),
-                    ],
-                  ],
-                  if (widget.state.isCameraError)
-                    _buildCameraErrorOverlay(),
-                  if (!widget.state.isConnected)
-                    _buildOfflineOverlay(),
-                ],
-              ),
-            ),
-          ),
-        ),
-      );
-  }
-
-  Widget _buildCameraBackground(AssistanceState status) {
-    return Container(
-      color: const Color(0xFF0D0D0D),
-      child: CustomPaint(
-        painter: GridPainter(
-          gridColor: status == AssistanceState.riskDetected
-              ? RiqsiTheme.alertHigh.withOpacity(0.1)
-              : RiqsiTheme.textSecondary.withOpacity(0.05),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildInactiveOverlay() {
-    return Center(
-      child: SingleChildScrollView(
-        physics: const BouncingScrollPhysics(),
-        child: Padding(
-          padding: const EdgeInsets.all(16.0),
+      cameraContent = Container(
+        color: Colors.black,
+        child: const Center(
           child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: RiqsiTheme.darkBg,
-                  shape: BoxShape.circle,
-                  border: Border.all(color: RiqsiTheme.textSecondary.withOpacity(0.3), width: 2),
-                ),
-                child: const Icon(
-                  Icons.visibility_off_rounded,
-                  size: 44,
-                  color: RiqsiTheme.accentCyan,
-                ),
-              ),
-              const SizedBox(height: 16),
+              CircularProgressIndicator(color: RiqsiTheme.accentCyan),
+              SizedBox(height: 16),
               Text(
-                "Asistencia Inactiva",
-                style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                      fontWeight: FontWeight.bold,
-                    ),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                "Toca el botón central abajo para iniciar el asistente de visión.",
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: RiqsiTheme.textSecondary,
-                    ),
-                textAlign: TextAlign.center,
+                "Iniciando cámara 0.5x...",
+                style: TextStyle(color: Colors.white70, fontSize: 16),
               ),
             ],
           ),
         ),
-      ),
-    );
-  }
-
-  Widget _buildDetectionBoundingBox(DetectionEvent detection) {
-    final isHighRisk = detection.riskLevel == 'Alto';
-    final accentColor = isHighRisk ? RiqsiTheme.alertHigh : RiqsiTheme.accentCyan;
-
-    double left = 40.0;
-    double top = 80.0;
-    double width = 200.0;
-    double height = 220.0;
-
-    if (detection.relativePosition == 'Derecha') {
-      left = 130.0;
-      top = 100.0;
-    } else if (detection.relativePosition == 'Izquierda') {
-      left = 20.0;
-      top = 120.0;
+      );
     }
 
-    return Positioned(
-      left: left,
-      top: top,
-      width: width,
-      height: height,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+    // Modo inmersivo permanente a pantalla completa
+    return Container(
+      color: Colors.black,
+      width: double.infinity,
+      height: double.infinity,
+      child: Stack(
+        fit: StackFit.expand,
         children: [
-          Container(
-            height: height - 40,
-            decoration: BoxDecoration(
-              border: Border.all(color: accentColor, width: 3.5),
-              borderRadius: BorderRadius.circular(16),
-              color: accentColor.withOpacity(0.08),
-            ),
-            child: Stack(
-              children: [
-                Positioned(
-                  top: 8,
-                  left: 8,
-                  child: Container(
-                    width: 12,
-                    height: 12,
-                    decoration: BoxDecoration(
-                      border: Border(
-                        top: BorderSide(color: accentColor, width: 3),
-                        left: BorderSide(color: accentColor, width: 3),
-                      ),
-                    ),
-                  ),
-                ),
-                Positioned(
-                  bottom: 8,
-                  right: 8,
-                  child: Container(
-                    width: 12,
-                    height: 12,
-                    decoration: BoxDecoration(
-                      border: Border(
-                        bottom: BorderSide(color: accentColor, width: 3),
-                        right: BorderSide(color: accentColor, width: 3),
-                      ),
-                    ),
-                  ),
-                ),
-                Center(
-                  child: Icon(
-                    isHighRisk ? Icons.report_problem_rounded : Icons.center_focus_strong,
-                    color: accentColor,
-                    size: 40,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 6),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: BoxDecoration(
-              color: accentColor,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  isHighRisk ? Icons.warning_amber_rounded : Icons.radar,
-                  color: isHighRisk ? Colors.white : Colors.black,
-                  size: 16,
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  "${detection.label} (${detection.relativePosition})",
-                  style: TextStyle(
-                    color: isHighRisk ? Colors.white : Colors.black,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 14,
-                  ),
-                ),
-              ],
-            ),
-          ),
+          cameraContent,
+          if (isScanning && widget.state.isConnected)
+            _buildBoundingBoxes(),
         ],
       ),
     );
   }
 
-  Widget _buildIndividualObjectBox(DetectedObject obj) {
-    final isHighRisk = obj.riskLevel == 'Alto';
-    final accentColor = isHighRisk ? RiqsiTheme.alertHigh : RiqsiTheme.accentCyan;
-
-    double left = 40.0;
-    double top = 80.0;
-    double width = 160.0;
-    double height = 180.0;
-
-    if (obj.relativePosition == 'Derecha') {
-      left = 180.0;
-      top = 110.0;
-    } else if (obj.relativePosition == 'Izquierda') {
-      left = 15.0;
-      top = 130.0;
-    } else {
-      left = 100.0;
-      top = 70.0;
+  Widget _buildBoundingBoxes() {
+    final activeDetection = widget.state.activeDetection;
+    if (activeDetection == null || activeDetection.objects.isEmpty) {
+      return const SizedBox.shrink();
     }
 
-    return Positioned(
-      left: left,
-      top: top,
-      width: width,
-      height: height,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            height: height - 40,
-            decoration: BoxDecoration(
-              border: Border.all(color: accentColor, width: 3.0),
-              borderRadius: BorderRadius.circular(12),
-              color: accentColor.withOpacity(0.06),
-            ),
-            child: Stack(
-              children: [
-                Center(
-                  child: Icon(
-                    isHighRisk ? Icons.report_problem_rounded : Icons.center_focus_strong,
-                    color: accentColor,
-                    size: 32,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final w = constraints.maxWidth;
+        final h = constraints.maxHeight;
+
+        return Stack(
+          children: activeDetection.objects.map((obj) {
+            double left = 0;
+            double top = 0;
+            double width = 0;
+            double height = 0;
+
+            if (obj.boxNorm.length == 4) {
+              left = (obj.boxNorm[0] * w).clamp(0.0, w);
+              top = (obj.boxNorm[1] * h).clamp(0.0, h);
+              width = ((obj.boxNorm[2] - obj.boxNorm[0]) * w).clamp(24.0, w - left);
+              height = ((obj.boxNorm[3] - obj.boxNorm[1]) * h).clamp(24.0, h - top);
+            } else if (obj.box.length == 4) {
+              left = obj.box[0].toDouble().clamp(0.0, w);
+              top = obj.box[1].toDouble().clamp(0.0, h);
+              width = (obj.box[2] - obj.box[0]).toDouble().clamp(24.0, w - left);
+              height = (obj.box[3] - obj.box[1]).toDouble().clamp(24.0, h - top);
+            } else {
+              return const SizedBox.shrink();
+            }
+
+            final color = _getColorForObject(obj.label, obj.riskLevel);
+
+            return Positioned(
+              left: left,
+              top: top,
+              width: width,
+              height: height,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  // 1. Cuadro delimitador del objeto (Bounding Box)
+                  Container(
+                    decoration: BoxDecoration(
+                      border: Border.all(color: color, width: 2.5),
+                      borderRadius: BorderRadius.circular(6),
+                      color: color.withValues(alpha: 0.12),
+                    ),
                   ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 4),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            decoration: BoxDecoration(
-              color: accentColor,
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  isHighRisk ? Icons.warning_amber_rounded : Icons.radar,
-                  color: isHighRisk ? Colors.white : Colors.black,
-                  size: 12,
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  "${obj.label} (${obj.relativePosition})",
-                  style: TextStyle(
-                    color: isHighRisk ? Colors.white : Colors.black,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 11,
+                  // 2. Etiqueta con el nombre y distancia en la parte superior izquierda
+                  Positioned(
+                    left: -1,
+                    top: -1,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: color,
+                        borderRadius: const BorderRadius.only(
+                          topLeft: Radius.circular(5),
+                          bottomRight: Radius.circular(8),
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.5),
+                            blurRadius: 4,
+                            offset: const Offset(1, 1),
+                          )
+                        ],
+                      ),
+                      child: Text(
+                        obj.distancia.isNotEmpty
+                            ? "${obj.label.toUpperCase()} • ${obj.distancia}"
+                            : obj.label.toUpperCase(),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ),
                   ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
+                ],
+              ),
+            );
+          }).toList(),
+        );
+      },
     );
   }
 
-  Widget _buildCameraErrorOverlay() {
-    return Container(
-      color: Colors.black.withOpacity(0.9),
-      child: Center(
-        child: SingleChildScrollView(
-          physics: const BouncingScrollPhysics(),
-          child: Padding(
-            padding: const EdgeInsets.all(20.0),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Icon(Icons.videocam_off_rounded, size: 48, color: RiqsiTheme.alertHigh),
-                const SizedBox(height: 12),
-                Text(
-                  "Error de Cámara",
-                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                        color: RiqsiTheme.alertHigh,
-                        fontWeight: FontWeight.bold,
-                      ),
-                ),
-                const SizedBox(height: 8),
-                const Text(
-                  "No se pudo acceder a la cámara. Verifique los permisos en el sistema.",
-                  textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 15, color: Colors.white70),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildOfflineOverlay() {
-    return Container(
-      color: Colors.black.withOpacity(0.85),
-      child: Center(
-        child: SingleChildScrollView(
-          physics: const BouncingScrollPhysics(),
-          child: Padding(
-            padding: const EdgeInsets.all(20.0),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Icon(Icons.wifi_off_rounded, size: 48, color: Colors.amber),
-                const SizedBox(height: 12),
-                Text(
-                  "Sin Conexión",
-                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                        color: Colors.amber,
-                        fontWeight: FontWeight.bold,
-                      ),
-                ),
-                const SizedBox(height: 8),
-                const Text(
-                  "Riqsi está funcionando sin conexión. Las descripciones pueden verse reducidas.",
-                  textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 15, color: Colors.white70),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class GridPainter extends CustomPainter {
-  final Color gridColor;
-
-  GridPainter({required this.gridColor});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = gridColor
-      ..strokeWidth = 1.0;
-
-    const double gridSpacing = 40.0;
-
-    for (double x = 0; x < size.width; x += gridSpacing) {
-      canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
+  Color _getColorForObject(String label, String risk) {
+    final l = label.toLowerCase();
+    if (risk == "Alto" || l.contains("hueco") || l.contains("desnivel") || l.contains("pared") || l.contains("peligro")) {
+      return const Color(0xFFFF2A2A); // Rojo peligro
     }
-
-    for (double y = 0; y < size.height; y += gridSpacing) {
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
+    if (l.contains("persona") || l.contains("peatón")) {
+      return const Color(0xFFE040FB); // Magenta
     }
+    if (l.contains("auto") || l.contains("camión") || l.contains("bus") || l.contains("moto") || l.contains("bicicleta")) {
+      return const Color(0xFF00E676); // Verde
+    }
+    if (l.contains("perro") || l.contains("gato") || l.contains("animal")) {
+      return const Color(0xFF00E5FF); // Celeste / Cyan
+    }
+    if (l.contains("semáforo") || l.contains("señal") || l.contains("escalón")) {
+      return const Color(0xFFFFD600); // Amarillo brillante
+    }
+    return const Color(0xFF2979FF); // Azul
   }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
