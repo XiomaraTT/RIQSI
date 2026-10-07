@@ -10,7 +10,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
     sensitivity: 'Alta',
     language: 'Español',
     userName: 'Xiomara Torres',
-    serverIp: '192.168.0.3',
+    serverIp: '10.247.64.45',
   );
 
   @override

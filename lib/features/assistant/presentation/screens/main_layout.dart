@@ -5,7 +5,7 @@ import '../../../../state/app_state.dart';
 
 // Screens
 import 'asistente_screen.dart';
-import '../../../history/presentation/screens/historial_screen.dart';
+import '../../../map/presentation/screens/mapa_screen.dart';
 import '../../../settings/presentation/screens/perfil_screen.dart';
 import '../widgets/alerta_overlay.dart';
 
@@ -19,11 +19,12 @@ class MainLayout extends StatelessWidget {
     // List of screens corresponding to bottom nav tabs
     final List<Widget> screens = [
       const AsistenteScreen(),
-      const HistorialScreen(),
+      const MapaScreen(),
       const PerfilScreen(),
     ];
 
     return Scaffold(
+      extendBody: true,
       body: Stack(
         fit: StackFit.expand,
         children: [
@@ -42,16 +43,17 @@ class MainLayout extends StatelessWidget {
         label: "Barra de navegación principal",
         child: Container(
           decoration: BoxDecoration(
+            color: RiqsiTheme.darkBg.withValues(alpha: 0.88),
             border: Border(
               top: BorderSide(
-                color: RiqsiTheme.textSecondary.withOpacity(0.15),
+                color: RiqsiTheme.textSecondary.withValues(alpha: 0.15),
                 width: 1.5,
               ),
             ),
           ),
           child: NavigationBarTheme(
             data: NavigationBarThemeData(
-              indicatorColor: RiqsiTheme.accentCyan.withOpacity(0.15),
+              indicatorColor: RiqsiTheme.accentCyan.withValues(alpha: 0.15),
               labelTextStyle: WidgetStateProperty.resolveWith((states) {
                 final isSelected = states.contains(WidgetState.selected);
                 return TextStyle(
@@ -69,15 +71,14 @@ class MainLayout extends StatelessWidget {
               }),
             ),
             child: NavigationBar(
-              height: 90, // Spacious accessibility layout
-              backgroundColor: RiqsiTheme.darkBg,
+              height: 80,
+              backgroundColor: Colors.transparent,
               selectedIndex: state.currentTab,
               onDestinationSelected: (index) {
                 state.setTab(index);
-                // Speak tab selection
                 String tabName = "";
-                if (index == 0) tabName = "Inicio, Asistente Visual";
-                if (index == 1) tabName = "Historial de Detecciones";
+                if (index == 0) tabName = "Inicio, Asistente Visual 0.5x";
+                if (index == 1) tabName = "Mapa y Navegación Asistida";
                 if (index == 2) tabName = "Configuración y Perfil";
                 state.speak("Pestaña $tabName seleccionada.");
                 state.vibrate(40);
@@ -87,13 +88,13 @@ class MainLayout extends StatelessWidget {
                   icon: Icon(Icons.remove_red_eye_outlined),
                   selectedIcon: Icon(Icons.remove_red_eye_rounded),
                   label: "Inicio",
-                  tooltip: "Inicio - Asistente Visual",
+                  tooltip: "Inicio - Visión 0.5x",
                 ),
                 NavigationDestination(
-                  icon: Icon(Icons.history_outlined),
-                  selectedIcon: Icon(Icons.history_rounded),
-                  label: "Historial",
-                  tooltip: "Historial de Detecciones",
+                  icon: Icon(Icons.map_outlined),
+                  selectedIcon: Icon(Icons.map_rounded),
+                  label: "Mapa",
+                  tooltip: "Mapa y Navegación Asistida",
                 ),
                 NavigationDestination(
                   icon: Icon(Icons.person_outline_rounded),
