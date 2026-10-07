@@ -26,12 +26,16 @@ class VisionRepositoryImpl implements VisionRepository {
           if (data["objects"] != null) {
             for (var item in data["objects"]) {
               final List<int> box = List<int>.from(item["box"] ?? []);
+              final List<double> boxNorm = item["box_norm"] != null
+                  ? List<double>.from((item["box_norm"] as List).map((e) => (e as num).toDouble()))
+                  : [];
               objectsList.add(DetectedObject(
                 label: item["label"] as String? ?? "",
-                relativePosition: item["position"] as String? ?? "",
+                relativePosition: (item["pos"] ?? item["position"] ?? "") as String,
                 riskLevel: item["risk"] as String? ?? "Bajo",
                 distancia: item["distancia"] as String? ?? "lejos",
                 box: box,
+                boxNorm: boxNorm,
               ));
             }
           }

@@ -4,6 +4,7 @@ class DetectedObject {
   final String riskLevel;
   final String distancia; 
   final List<int> box;
+  final List<double> boxNorm;
 
   DetectedObject({
     required this.label,
@@ -11,5 +12,6 @@ class DetectedObject {
     required this.riskLevel,
     required this.distancia, 
     required this.box,
+    this.boxNorm = const [],
   });
 }
