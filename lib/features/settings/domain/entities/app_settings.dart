@@ -40,4 +40,47 @@ class AppSettings {
       serverIp: serverIp ?? this.serverIp,
     );
   }
+
+  static AppSettings get defaults => AppSettings(
+        voiceSpeed: 1.0,
+        volume: 0.8,
+        vibrationEnabled: true,
+        alertFrequency: 'Alta',
+        sensitivity: 'Alta',
+        language: 'Español',
+        userName: 'Xiomara Torres',
+        serverIp: '10.247.64.45',
+      );
+
+  Map<String, dynamic> toMap() => {
+        'voiceSpeed': voiceSpeed,
+        'volume': volume,
+        'vibrationEnabled': vibrationEnabled,
+        'alertFrequency': alertFrequency,
+        'sensitivity': sensitivity,
+        'language': language,
+        'userName': userName,
+        'serverIp': serverIp,
+      };
+
+  /// Lee un mapa persistido; los campos ausentes o inválidos toman el valor
+  /// por defecto.
+  factory AppSettings.fromMap(Map<String, dynamic> map) {
+    final d = AppSettings.defaults;
+    double numOr(dynamic v, double fallback) =>
+        v is num ? v.toDouble() : fallback;
+    String strOr(dynamic v, String fallback) => v is String ? v : fallback;
+    return AppSettings(
+      voiceSpeed: numOr(map['voiceSpeed'], d.voiceSpeed),
+      volume: numOr(map['volume'], d.volume),
+      vibrationEnabled: map['vibrationEnabled'] is bool
+          ? map['vibrationEnabled'] as bool
+          : d.vibrationEnabled,
+      alertFrequency: strOr(map['alertFrequency'], d.alertFrequency),
+      sensitivity: strOr(map['sensitivity'], d.sensitivity),
+      language: strOr(map['language'], d.language),
+      userName: strOr(map['userName'], d.userName),
+      serverIp: strOr(map['serverIp'], d.serverIp),
+    );
+  }
 }
