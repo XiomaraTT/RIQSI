@@ -149,9 +149,9 @@ class _MapaScreenState extends State<MapaScreen> {
 
   /// Lienzo del Mapa con FlutterMap
   Widget _buildMapCanvas(AppState state) {
-    final tileUrl = _useDarkMap
-        ? "https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"
-        : "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+    // Carto dark_all ahora exige API key (devuelve "API KEY REQUIRED"):
+    // el modo oscuro usa los mismos mosaicos de OSM con un filtro oscuro.
+    const tileUrl = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 
     final dest = state.activeDestination;
     final mapLabel = _destinationLocation == null
@@ -186,6 +186,7 @@ class _MapaScreenState extends State<MapaScreen> {
           urlTemplate: tileUrl,
           userAgentPackageName: 'com.example.riqsi',
           maxZoom: 19,
+          tileBuilder: _useDarkMap ? darkModeTileBuilder : null,
         ),
 
         // Línea de Ruta Peatonal (Polyline)
