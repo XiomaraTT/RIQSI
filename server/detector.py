@@ -9,6 +9,7 @@ import hmac
 import json
 import os
 import queue
+import socket
 import sys
 import threading
 import time
@@ -335,6 +336,23 @@ class VisionServer:
             print("[DESCONECTADO]", flush=True)
 
 
+def lan_ips() -> list:
+    """IPv4 de esta PC en la red local (las que hay que escribir en la app)."""
+    ips = set()
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))  # no envía nada: solo elige la interfaz de salida
+            ips.add(s.getsockname()[0])
+    except OSError:
+        pass
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ips.add(info[4][0])
+    except OSError:
+        pass
+    return sorted(ip for ip in ips if not ip.startswith(("127.", "169.254.")))
+
+
 async def main(port: int, monitor_on: bool):
     token = os.environ.get("RIQSI_TOKEN") or None
     monitor = Monitor() if monitor_on else None
@@ -343,11 +361,22 @@ async def main(port: int, monitor_on: bool):
     print("   RIQSI CORE - SISTEMA DE VISIÓN Y GUÍA ESPACIAL")
     print(f"   Puerto: {port} | Modelos: YOLOv8 + Detección de Suelo")
     print(f"   Token: {'requerido (?token=)' if token else 'no requerido'} | Monitor: {'sí' if monitor else 'no'}")
+    ips = lan_ips()
+    if ips:
+        print("   Escribe en la app (Perfil → Servidor IP) una de estas:")
+        for ip in ips:
+            print(f"      {ip}")
+    else:
+        print("   [AVISO] No se encontró una IP de red local: ¿la PC está conectada al Wi-Fi?")
     print("=======================================================\n", flush=True)
     try:
         async with serve(server.handler, "0.0.0.0", port, max_size=MAX_MESSAGE_BYTES,
                          process_request=server.process_request) as ws_server:
             await ws_server.serve_forever()
+    except OSError as e:
+        print(f"[ERROR] No se pudo abrir el puerto {port}: {e}\n"
+              "        ¿Ya hay otro servidor RIQSI abierto? Ciérralo o usa --port 8766.", flush=True)
+        raise SystemExit(1)
     finally:
         if monitor:
             monitor.close()

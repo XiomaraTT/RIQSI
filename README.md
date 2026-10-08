@@ -40,3 +40,18 @@ El servidor escucha en el puerto **8765** y atiende a **un solo celular a la vez
    * Guarda los cambios.
 4. Regresa a la pestaña **Inicio** y presiona el gran botón de play central.
 5. ¡Listo! La cámara de tu celular se enviará a la PC, que analizará cada imagen. El teléfono **reproducirá el audio en voz alta en español** y **vibrará** cuando haya un obstáculo cerca.
+
+---
+
+## 🧯 Si "el servidor no sirve" (solución de problemas)
+
+| Síntoma | Causa más común | Qué hacer |
+|---|---|---|
+| Al ejecutar sale `ModuleNotFoundError: No module named 'ultralytics'` (o `cv2`, `numpy`) | Se instaló solo `opencv-python websockets` | `pip install -r server/requirements.txt` (YOLO **no** es opcional) |
+| `No se pudo abrir el puerto 8765` | Ya hay otro servidor abierto | Cierra la otra ventana o usa `python server/detector.py --port 8766` |
+| La app dice **"Sin conexión con el servidor"** / **RECONECTANDO** | IP equivocada en la app | Usa la IP que imprime el servidor al arrancar ("Escribe en la app…"), no la de otra PC |
+| La IP es correcta pero igual no conecta | **Firewall de Windows** bloquea a Python | La primera vez que corre, Windows pregunta: marca **Redes privadas** y "Permitir". O en `cmd` como administrador: `netsh advfirewall firewall add rule name="RIQSI 8765" dir=in action=allow protocol=TCP localport=8765` |
+| Igual no conecta en la universidad / Wi-Fi público | La red aísla a los dispositivos entre sí | Usa el **hotspot del celular** (conecta la PC a él) o conecta el celular por USB y ejecuta `adb reverse tcp:8765 tcp:8765`; en la app pon `127.0.0.1` |
+| Conecta pero nunca detecta nada | La cámara está tapada u oscura | Apunta la cámara trasera a personas, autos, postes, puertas… |
+
+Para comprobar el servidor sin el celular: `python -m pytest server/tests -q` (lógica) y, con el servidor abierto, abrir la app en un celular de la misma red.
