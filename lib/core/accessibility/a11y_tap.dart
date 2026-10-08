@@ -44,7 +44,8 @@ class A11yTap extends StatelessWidget {
         color: Colors.transparent,
         child: InkWell(
           onTap: onTap,
-          borderRadius: borderRadius ?? BorderRadius.circular(kMinTapTarget / 2),
+          borderRadius:
+              borderRadius ?? BorderRadius.circular(kMinTapTarget / 2),
           child: ConstrainedBox(
             constraints: const BoxConstraints(
               minWidth: kMinTapTarget,
@@ -56,7 +57,11 @@ class A11yTap extends StatelessWidget {
       ),
     );
     if (showTooltip) {
-      content = Tooltip(message: label, excludeFromSemantics: true, child: content);
+      content = Tooltip(
+        message: label,
+        excludeFromSemantics: true,
+        child: content,
+      );
     }
     return content;
   }

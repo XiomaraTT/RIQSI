@@ -1,8 +1,40 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
 import 'package:provider/provider.dart';
+import '../../../../core/accessibility/a11y_tap.dart';
+import '../../../../core/accessibility/ui_speech.dart';
 import '../../../../core/theme/riqsi_theme.dart';
 import '../../../../state/app_state.dart';
 import 'ayuda_screen.dart';
+
+/// Texto legible de la velocidad: 1 -> "1x", 1.5 -> "1.5x", 2 -> "2x".
+String formatSpeed(double speed) {
+  final isInt = speed == speed.roundToDouble();
+  return "${isInt ? speed.toStringAsFixed(0) : speed.toString()}x";
+}
+
+/// Valida un servidor: IPv4 (octetos 0-255) u nombre de host. Devuelve un
+/// mensaje de error en español o null si es válido.
+String? validateServerHost(String raw) {
+  final v = raw.trim();
+  if (v.isEmpty) return "Escribe la dirección del servidor.";
+  final ipLike = RegExp(r'^\d+(\.\d+){3}$');
+  if (ipLike.hasMatch(v)) {
+    final ok = v.split('.').every((p) {
+      final n = int.tryParse(p);
+      return n != null && n >= 0 && n <= 255;
+    });
+    return ok
+        ? null
+        : "La dirección IP no es válida. Cada número debe estar entre 0 y 255.";
+  }
+  final host = RegExp(
+    r'^(?=.{1,253}$)[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$',
+  );
+  return host.hasMatch(v)
+      ? null
+      : "Escribe una IP como 192.168.1.15 o un nombre de host válido.";
+}
 
 class PerfilScreen extends StatelessWidget {
   const PerfilScreen({super.key});
@@ -11,10 +43,11 @@ class PerfilScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final state = Provider.of<AppState>(context);
 
-    // Dynamic conversion to match image labels
     final String volumePercentage = "${(state.volume * 100).toInt()}%";
-    final String speedLabel = "${state.voiceSpeed.toStringAsFixed(0)}x";
-    final String vibrationLabel = state.vibrationEnabled ? "Activada" : "Desactivada";
+    final String speedLabel = formatSpeed(state.voiceSpeed);
+    final String vibrationLabel = state.vibrationEnabled
+        ? "Activada"
+        : "Desactivada";
 
     return Scaffold(
       body: SafeArea(
@@ -22,43 +55,41 @@ class PerfilScreen extends StatelessWidget {
           physics: const BouncingScrollPhysics(),
           padding: const EdgeInsets.symmetric(horizontal: 28.0, vertical: 20.0),
           children: [
-            // Cyan uppercase category marker
             const Text(
               "CONFIGURACIÓN",
               style: TextStyle(
                 color: RiqsiTheme.accentCyan,
-                fontSize: 12,
+                fontSize: 14,
                 fontWeight: FontWeight.bold,
                 letterSpacing: 1.5,
               ),
             ),
             const SizedBox(height: 6),
-            
-            // Large bold title
-            const Text(
-              "Perfil",
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 34,
-                fontWeight: FontWeight.w900,
+            Semantics(
+              header: true,
+              child: Text(
+                "Perfil",
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 34,
+                  fontWeight: FontWeight.w900,
+                ),
               ),
             ),
             const SizedBox(height: 16),
 
-            // Profile row
             _buildProfileRow(context, state),
             const SizedBox(height: 16),
             const Divider(color: Color(0xFF1B2C3F), height: 1),
             const SizedBox(height: 16),
 
-            // Preferences Section
             _buildSectionHeader("PREFERENCIAS"),
-            
+
             _buildPreferenceRow(
               label: "Idioma",
               value: state.language,
               onTap: () {
-                state.speak("Idioma fijado en Español.");
+                announceUi(context, "Idioma fijado en Español.");
               },
             ),
             _buildPreferenceRow(
@@ -79,7 +110,10 @@ class PerfilScreen extends StatelessWidget {
                   newSpeed = 1.5;
                 }
                 state.updateVoiceSpeed(newSpeed);
-                state.speak("Velocidad de voz a ${newSpeed.toStringAsFixed(1)}.");
+                announceUi(
+                  context,
+                  "Velocidad de voz a ${formatSpeed(newSpeed)}.",
+                );
               },
             ),
             _buildPreferenceRow(
@@ -93,15 +127,23 @@ class PerfilScreen extends StatelessWidget {
                   newVol = 1.0;
                 }
                 state.updateVolume(newVol);
-                state.speak("Volumen al ${(newVol * 100).toInt()} por ciento.");
+                announceUi(
+                  context,
+                  "Volumen al ${(newVol * 100).toInt()} por ciento.",
+                );
               },
             ),
             _buildPreferenceRow(
               label: "Vibración",
               value: vibrationLabel,
               onTap: () {
-                state.toggleVibration(!state.vibrationEnabled);
-                state.speak(!state.vibrationEnabled ? "Vibración activada." : "Vibración desactivada.");
+                // Se calcula el valor NUEVO antes de cambiarlo.
+                final newValue = !state.vibrationEnabled;
+                state.toggleVibration(newValue);
+                announceUi(
+                  context,
+                  newValue ? "Vibración activada." : "Vibración desactivada.",
+                );
               },
             ),
             _buildPreferenceRow(
@@ -115,28 +157,25 @@ class PerfilScreen extends StatelessWidget {
                   newSens = "50%";
                 }
                 state.updateSensitivity(newSens);
-                state.speak("Sensibilidad de detección fijada al $newSens.");
+                announceUi(
+                  context,
+                  "Sensibilidad de detección fijada al $newSens.",
+                );
               },
             ),
-            _buildPreferenceRow(
-              label: "Modo de accesibilidad",
-              value: "Alto contraste",
-              onTap: () {
-                state.speak("Modo de accesibilidad fijado en alto contraste.");
-              },
-            ),
-            
+            // La opción "Alto contraste" era decorativa (no cambiaba nada) y se
+            // quitó para no engañar al usuario.
+
             const SizedBox(height: 16),
             const Divider(color: Color(0xFF1B2C3F), height: 1),
             const SizedBox(height: 16),
 
-            // Support Section
             _buildSectionHeader("SOPORTE"),
-            
+
             _buildSupportRow(
               label: "Ayuda y comandos",
               onTap: () {
-                state.speak("Abriendo pantalla de ayuda.");
+                speakUi(context, "Abriendo pantalla de ayuda.");
                 Navigator.push(
                   context,
                   MaterialPageRoute(builder: (context) => const AyudaScreen()),
@@ -144,13 +183,16 @@ class PerfilScreen extends StatelessWidget {
               },
             ),
             _buildSupportRow(
-              label: "Acerca de VisiónAI",
+              label: "Acerca de Riqsi",
               onTap: () {
-                state.speak("Riqsi es un asistente inteligente de visión del entorno para la autonomía de personas con discapacidad visual.");
+                speakUi(
+                  context,
+                  "Riqsi es un asistente inteligente de visión del entorno para la autonomía de personas con discapacidad visual.",
+                );
                 _showAboutDialog(context);
               },
             ),
-            
+
             const SizedBox(height: 24),
           ],
         ),
@@ -161,41 +203,47 @@ class PerfilScreen extends StatelessWidget {
   Widget _buildSectionHeader(String title) {
     return Padding(
       padding: const EdgeInsets.only(top: 8.0, bottom: 8.0),
-      child: Text(
-        title,
-        style: const TextStyle(
-          color: RiqsiTheme.textSecondary,
-          fontSize: 12,
-          fontWeight: FontWeight.bold,
-          letterSpacing: 1.5,
+      child: Semantics(
+        header: true,
+        child: Text(
+          title,
+          style: const TextStyle(
+            color: RiqsiTheme.textSecondary,
+            fontSize: 14,
+            fontWeight: FontWeight.bold,
+            letterSpacing: 1.5,
+          ),
         ),
       ),
     );
   }
 
   Widget _buildProfileRow(BuildContext context, AppState state) {
-    final String displayName = state.userName == "Usuario Riqsi" ? "María González" : state.userName;
+    final String displayName = state.userName == "Usuario Riqsi"
+        ? "María González"
+        : state.userName;
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8.0),
       child: Row(
         children: [
-          Container(
-            width: 64,
-            height: 64,
-            decoration: BoxDecoration(
-              color: const Color(0xFF0C1622),
-              shape: BoxShape.circle,
-              border: Border.all(color: RiqsiTheme.accentCyan, width: 1.5),
-            ),
-            child: const Icon(
-              Icons.person_outline_rounded,
-              color: RiqsiTheme.accentCyan,
-              size: 32,
+          ExcludeSemantics(
+            child: Container(
+              width: 64,
+              height: 64,
+              decoration: BoxDecoration(
+                color: const Color(0xFF0C1622),
+                shape: BoxShape.circle,
+                border: Border.all(color: RiqsiTheme.accentCyan, width: 1.5),
+              ),
+              child: const Icon(
+                Icons.person_outline_rounded,
+                color: RiqsiTheme.accentCyan,
+                size: 32,
+              ),
             ),
           ),
           const SizedBox(width: 16),
-          
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -219,11 +267,14 @@ class PerfilScreen extends StatelessWidget {
               ],
             ),
           ),
-          
-          IconButton(
-            icon: const Icon(Icons.edit_rounded, color: RiqsiTheme.accentCyan, size: 20),
-            onPressed: () => _showNameEditDialog(context, state),
-            tooltip: "Editar nombre",
+          A11yTap(
+            label: "Editar nombre",
+            onTap: () => _showNameEditDialog(context, state),
+            child: const Icon(
+              Icons.edit_rounded,
+              color: RiqsiTheme.accentCyan,
+              size: 24,
+            ),
           ),
         ],
       ),
@@ -238,31 +289,42 @@ class PerfilScreen extends StatelessWidget {
     return Semantics(
       button: true,
       label: "$label, valor actual $value",
-      hint: "Toca para modificar esta preferencia",
+      hint: "Toca dos veces para modificar esta preferencia",
+      excludeSemantics: true,
+      onTap: onTap,
       child: InkWell(
         onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 14.0),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                label,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 18,
-                  fontWeight: FontWeight.w500,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 56),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 14.0),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Flexible(
+                  child: Text(
+                    label,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
                 ),
-              ),
-              Text(
-                value,
-                style: const TextStyle(
-                  color: RiqsiTheme.textSecondary,
-                  fontSize: 18,
-                  fontWeight: FontWeight.w500,
+                const SizedBox(width: 12),
+                Flexible(
+                  child: Text(
+                    value,
+                    textAlign: TextAlign.end,
+                    style: const TextStyle(
+                      color: RiqsiTheme.textSecondary,
+                      fontSize: 18,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -276,28 +338,33 @@ class PerfilScreen extends StatelessWidget {
     return Semantics(
       button: true,
       label: label,
-      hint: "Toca para abrir esta sección",
+      hint: "Toca dos veces para abrir esta sección",
+      excludeSemantics: true,
+      onTap: onTap,
       child: InkWell(
         onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 14.0),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                label,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 18,
-                  fontWeight: FontWeight.w500,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 56),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 14.0),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  label,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
-              ),
-              const Icon(
-                Icons.chevron_right_rounded,
-                color: RiqsiTheme.accentCyan,
-                size: 24,
-              ),
-            ],
+                const Icon(
+                  Icons.chevron_right_rounded,
+                  color: RiqsiTheme.accentCyan,
+                  size: 24,
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -305,106 +372,192 @@ class PerfilScreen extends StatelessWidget {
   }
 
   void _showNameEditDialog(BuildContext context, AppState state) {
-    final controller = TextEditingController(text: state.userName == "Usuario Riqsi" ? "María González" : state.userName);
-    showDialog(
+    final initial = state.userName == "Usuario Riqsi"
+        ? "María González"
+        : state.userName;
+    showDialog<void>(
       context: context,
-      builder: (context) {
-        return AlertDialog(
-          backgroundColor: RiqsiTheme.darkSurface,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: const Text("Editar Nombre", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
-          content: TextField(
-            controller: controller,
-            style: const TextStyle(color: Colors.white, fontSize: 18),
-            decoration: const InputDecoration(
-              enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: RiqsiTheme.accentCyan)),
-              focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: RiqsiTheme.accentCyan, width: 2)),
-              hintText: "Escribe tu nombre",
-              hintStyle: TextStyle(color: RiqsiTheme.textSecondary),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text("Cancelar", style: TextStyle(color: RiqsiTheme.textSecondary, fontSize: 16)),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: RiqsiTheme.accentCyan),
-              onPressed: () {
-                if (controller.text.isNotEmpty) {
-                  state.updateUserName(controller.text);
-                  state.speak("Nombre cambiado a ${controller.text}.");
-                }
-                Navigator.pop(context);
-              },
-              child: const Text("Guardar", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 16)),
-            ),
-          ],
-        );
-      },
+      builder: (_) => _TextEditDialog(
+        title: "Editar Nombre",
+        label: "Nombre",
+        hint: "Escribe tu nombre",
+        initialValue: initial,
+        validator: (v) => v.trim().isEmpty ? "Escribe un nombre." : null,
+        onSave: (v) {
+          final name = v.trim();
+          state.updateUserName(name);
+          announceUi(context, "Nombre cambiado a $name.");
+        },
+      ),
     );
   }
 
   void _showIpEditDialog(BuildContext context, AppState state) {
-    final controller = TextEditingController(text: state.serverIp);
-    showDialog(
+    showDialog<void>(
+      context: context,
+      builder: (_) => _TextEditDialog(
+        title: "Editar IP del Servidor",
+        label: "Dirección del servidor",
+        hint: "Ej: 192.168.1.15 o 10.0.2.2",
+        initialValue: state.serverIp,
+        keyboardType: TextInputType.url,
+        validator: validateServerHost,
+        onSave: (v) => state.updateServerIp(v.trim()),
+      ),
+    );
+  }
+
+  void _showAboutDialog(BuildContext context) {
+    showDialog<void>(
       context: context,
       builder: (context) {
         return AlertDialog(
           backgroundColor: RiqsiTheme.darkSurface,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: const Text("Editar IP del Servidor", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
-          content: TextField(
-            controller: controller,
-            style: const TextStyle(color: Colors.white, fontSize: 18),
-            decoration: const InputDecoration(
-              enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: RiqsiTheme.accentCyan)),
-              focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: RiqsiTheme.accentCyan, width: 2)),
-              hintText: "Ej: 192.168.1.15 o 10.0.2.2",
-              hintStyle: TextStyle(color: RiqsiTheme.textSecondary),
-            ),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+          title: const Text(
+            "Acerca de Riqsi",
+            style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+          ),
+          content: const Text(
+            "Riqsi es un asistente visual diseñado para brindar autonomía y acompañamiento a personas con discapacidad visual.\n\nUtiliza la cámara y visión artificial del entorno para detectar obstáculos y riesgos en tiempo real.",
+            style: TextStyle(color: Colors.white, fontSize: 16, height: 1.4),
           ),
           actions: [
             TextButton(
+              style: TextButton.styleFrom(minimumSize: const Size(48, 48)),
               onPressed: () => Navigator.pop(context),
-              child: const Text("Cancelar", style: TextStyle(color: RiqsiTheme.textSecondary, fontSize: 16)),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: RiqsiTheme.accentCyan),
-              onPressed: () {
-                if (controller.text.isNotEmpty) {
-                  state.updateServerIp(controller.text);
-                }
-                Navigator.pop(context);
-              },
-              child: const Text("Guardar", style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 16)),
+              child: const Text(
+                "Cerrar",
+                style: TextStyle(
+                  color: RiqsiTheme.accentCyan,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 18,
+                ),
+              ),
             ),
           ],
         );
       },
     );
   }
+}
 
-  void _showAboutDialog(BuildContext context) {
-    showDialog(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          backgroundColor: RiqsiTheme.darkSurface,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          title: const Text("Acerca de VisiónAI", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
-          content: const Text(
-            "VisiónAI (Riqsi) es un asistente visual multiplataforma diseñado para brindar autonomía y acompañamiento a personas con discapacidad visual.\n\nUtiliza la cámara y visión artificial del entorno para detectar obstáculos y riesgos en tiempo real.",
-            style: TextStyle(color: Colors.white, fontSize: 16, height: 1.4),
+/// Diálogo de edición de un texto con validación accesible. El controlador
+/// vive y se libera en su propio State.
+class _TextEditDialog extends StatefulWidget {
+  final String title;
+  final String label;
+  final String hint;
+  final String initialValue;
+  final TextInputType? keyboardType;
+  final String? Function(String) validator;
+  final ValueChanged<String> onSave;
+
+  const _TextEditDialog({
+    required this.title,
+    required this.label,
+    required this.hint,
+    required this.initialValue,
+    required this.validator,
+    required this.onSave,
+    this.keyboardType,
+  });
+
+  @override
+  State<_TextEditDialog> createState() => _TextEditDialogState();
+}
+
+class _TextEditDialogState extends State<_TextEditDialog> {
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.initialValue,
+  );
+  String? _error;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final error = widget.validator(_controller.text);
+    if (error != null) {
+      setState(() => _error = error);
+      SemanticsService.sendAnnouncement(
+        View.of(context),
+        error,
+        TextDirection.ltr,
+      );
+      return;
+    }
+    widget.onSave(_controller.text.trim());
+    Navigator.pop(context);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: RiqsiTheme.darkSurface,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: Text(
+        widget.title,
+        style: const TextStyle(
+          fontWeight: FontWeight.bold,
+          color: Colors.white,
+        ),
+      ),
+      content: TextField(
+        controller: _controller,
+        autofocus: true,
+        keyboardType: widget.keyboardType,
+        style: const TextStyle(color: Colors.white, fontSize: 18),
+        onChanged: (_) {
+          if (_error != null) setState(() => _error = null);
+        },
+        onSubmitted: (_) => _submit(),
+        decoration: InputDecoration(
+          labelText: widget.label,
+          labelStyle: const TextStyle(color: RiqsiTheme.textSecondary),
+          errorText: _error,
+          errorMaxLines: 3,
+          errorStyle: const TextStyle(color: Color(0xFFFF8A80), fontSize: 14),
+          enabledBorder: const UnderlineInputBorder(
+            borderSide: BorderSide(color: RiqsiTheme.accentCyan),
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text("Cerrar", style: TextStyle(color: RiqsiTheme.accentCyan, fontWeight: FontWeight.bold, fontSize: 18)),
+          focusedBorder: const UnderlineInputBorder(
+            borderSide: BorderSide(color: RiqsiTheme.accentCyan, width: 2),
+          ),
+          hintText: widget.hint,
+          hintStyle: const TextStyle(color: RiqsiTheme.textSecondary),
+        ),
+      ),
+      actions: [
+        TextButton(
+          style: TextButton.styleFrom(minimumSize: const Size(48, 48)),
+          onPressed: () => Navigator.pop(context),
+          child: const Text(
+            "Cancelar",
+            style: TextStyle(color: RiqsiTheme.textSecondary, fontSize: 16),
+          ),
+        ),
+        ElevatedButton(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: RiqsiTheme.accentCyan,
+            minimumSize: const Size(48, 48),
+          ),
+          onPressed: _submit,
+          child: const Text(
+            "Guardar",
+            style: TextStyle(
+              color: Colors.black,
+              fontWeight: FontWeight.bold,
+              fontSize: 16,
             ),
-          ],
-        );
-      },
+          ),
+        ),
+      ],
     );
   }
 }

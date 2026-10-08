@@ -8,12 +8,12 @@ class RiqsiTheme {
   static const Color textPrimary = Color(0xFFFFFFFF);
   // Contraste (WCAG): #8CA0B6 sobre #070E17 = 7.2:1; sobre #0F1824 = 6.6:1 (>= 4.5:1).
   static const Color textSecondary = Color(0xFF8CA0B6); // Slate Grey claro
-  
+
   // Alert colors
   static const Color alertHigh = Color(0xFFFF3D00); // Tech Red-Orange
   static const Color alertMedium = Color(0xFFFFB300);
   static const Color alertLow = Color(0xFF00E676);
-  
+
   static ThemeData get darkTheme {
     return ThemeData(
       useMaterial3: true,
@@ -25,7 +25,7 @@ class RiqsiTheme {
         surface: darkSurface,
         onSurface: textPrimary,
       ),
-      
+
       // Accessibility typography rules (WCAG compliant sizing & weights)
       textTheme: const TextTheme(
         headlineLarge: TextStyle(
@@ -64,7 +64,7 @@ class RiqsiTheme {
           color: textPrimary,
         ),
       ),
-      
+
       // High contrast outline buttons
       outlinedButtonTheme: OutlinedButtonThemeData(
         style: OutlinedButton.styleFrom(
@@ -73,13 +73,10 @@ class RiqsiTheme {
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
           ),
-          textStyle: const TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
-          ),
+          textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
         ),
       ),
-      
+
       // Slider/Switch accessibility
       sliderTheme: const SliderThemeData(
         activeTrackColor: accentCyan,
@@ -88,14 +85,16 @@ class RiqsiTheme {
         valueIndicatorColor: accentCyan,
         trackHeight: 6.0,
       ),
-      
+
       switchTheme: SwitchThemeData(
         thumbColor: WidgetStateProperty.resolveWith((states) {
           if (states.contains(WidgetState.selected)) return accentCyan;
           return Colors.grey;
         }),
         trackColor: WidgetStateProperty.resolveWith((states) {
-          if (states.contains(WidgetState.selected)) return accentCyan.withValues(alpha: 0.3);
+          if (states.contains(WidgetState.selected)) {
+            return accentCyan.withValues(alpha: 0.3);
+          }
           return const Color(0xFF1B2C3F);
         }),
       ),
