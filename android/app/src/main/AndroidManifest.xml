@@ -4,7 +4,7 @@
     <uses-permission android:name="android.permission.VIBRATE"/>
     
     <application
-        android:label="riqsi"
+        android:label="Riqsi"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
