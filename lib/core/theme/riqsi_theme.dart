@@ -6,7 +6,8 @@ class RiqsiTheme {
   static const Color darkSurface = Color(0xFF0F1824);
   static const Color accentCyan = Color(0xFF00E5FF); // Vibrant Cyan
   static const Color textPrimary = Color(0xFFFFFFFF);
-  static const Color textSecondary = Color(0xFF5C6F84); // Slate Grey
+  // Contraste (WCAG): #8CA0B6 sobre #070E17 = 7.2:1; sobre #0F1824 = 6.6:1 (>= 4.5:1).
+  static const Color textSecondary = Color(0xFF8CA0B6); // Slate Grey claro
   
   // Alert colors
   static const Color alertHigh = Color(0xFFFF3D00); // Tech Red-Orange
@@ -94,7 +95,7 @@ class RiqsiTheme {
           return Colors.grey;
         }),
         trackColor: WidgetStateProperty.resolveWith((states) {
-          if (states.contains(WidgetState.selected)) return accentCyan.withOpacity(0.3);
+          if (states.contains(WidgetState.selected)) return accentCyan.withValues(alpha: 0.3);
           return const Color(0xFF1B2C3F);
         }),
       ),

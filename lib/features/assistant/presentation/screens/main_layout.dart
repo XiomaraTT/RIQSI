@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../../../../core/accessibility/ui_speech.dart';
 import '../../../../core/theme/riqsi_theme.dart';
 import '../../../../state/app_state.dart';
 
@@ -15,6 +16,7 @@ class MainLayout extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final state = Provider.of<AppState>(context);
+    final alertActive = state.assistanceState == AssistanceState.riskDetected;
 
     // List of screens corresponding to bottom nav tabs
     final List<Widget> screens = [
@@ -29,80 +31,87 @@ class MainLayout extends StatelessWidget {
         fit: StackFit.expand,
         children: [
           // 1. Current Tab Screen Content
-          IndexedStack(
-            index: state.currentTab,
-            children: screens,
+          ExcludeSemantics(
+            excluding:
+                alertActive, // TalkBack no debe leer lo que hay bajo la alerta
+            child: IndexedStack(index: state.currentTab, children: screens),
           ),
 
           // 2. High Risk Alert Overlay (Flashed full-screen on danger detection)
-          if (state.assistanceState == AssistanceState.riskDetected)
-            const AlertaOverlay(),
+          if (alertActive) const AlertaOverlay(),
         ],
       ),
-      bottomNavigationBar: Semantics(
-        label: "Barra de navegación principal",
-        child: Container(
-          decoration: BoxDecoration(
-            color: RiqsiTheme.darkBg.withValues(alpha: 0.88),
-            border: Border(
-              top: BorderSide(
-                color: RiqsiTheme.textSecondary.withValues(alpha: 0.15),
-                width: 1.5,
+      bottomNavigationBar: ExcludeSemantics(
+        excluding: alertActive,
+        child: Semantics(
+          label: "Barra de navegación principal",
+          child: Container(
+            decoration: BoxDecoration(
+              color: RiqsiTheme.darkBg.withValues(alpha: 0.88),
+              border: Border(
+                top: BorderSide(
+                  color: RiqsiTheme.textSecondary.withValues(alpha: 0.15),
+                  width: 1.5,
+                ),
               ),
             ),
-          ),
-          child: NavigationBarTheme(
-            data: NavigationBarThemeData(
-              indicatorColor: RiqsiTheme.accentCyan.withValues(alpha: 0.15),
-              labelTextStyle: WidgetStateProperty.resolveWith((states) {
-                final isSelected = states.contains(WidgetState.selected);
-                return TextStyle(
-                  fontSize: 16,
-                  fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
-                  color: isSelected ? RiqsiTheme.accentCyan : RiqsiTheme.textSecondary,
-                );
-              }),
-              iconTheme: WidgetStateProperty.resolveWith((states) {
-                final isSelected = states.contains(WidgetState.selected);
-                return IconThemeData(
-                  size: 32,
-                  color: isSelected ? RiqsiTheme.accentCyan : RiqsiTheme.textSecondary,
-                );
-              }),
-            ),
-            child: NavigationBar(
-              height: 80,
-              backgroundColor: Colors.transparent,
-              selectedIndex: state.currentTab,
-              onDestinationSelected: (index) {
-                state.setTab(index);
-                String tabName = "";
-                if (index == 0) tabName = "Inicio, Asistente Visual 0.5x";
-                if (index == 1) tabName = "Mapa y Navegación Asistida";
-                if (index == 2) tabName = "Configuración y Perfil";
-                state.speak("Pestaña $tabName seleccionada.");
-                state.vibrate(40);
-              },
-              destinations: const [
-                NavigationDestination(
-                  icon: Icon(Icons.remove_red_eye_outlined),
-                  selectedIcon: Icon(Icons.remove_red_eye_rounded),
-                  label: "Inicio",
-                  tooltip: "Inicio - Visión 0.5x",
-                ),
-                NavigationDestination(
-                  icon: Icon(Icons.map_outlined),
-                  selectedIcon: Icon(Icons.map_rounded),
-                  label: "Mapa",
-                  tooltip: "Mapa y Navegación Asistida",
-                ),
-                NavigationDestination(
-                  icon: Icon(Icons.person_outline_rounded),
-                  selectedIcon: Icon(Icons.person_rounded),
-                  label: "Perfil",
-                  tooltip: "Perfil y Configuración",
-                ),
-              ],
+            child: NavigationBarTheme(
+              data: NavigationBarThemeData(
+                indicatorColor: RiqsiTheme.accentCyan.withValues(alpha: 0.15),
+                labelTextStyle: WidgetStateProperty.resolveWith((states) {
+                  final isSelected = states.contains(WidgetState.selected);
+                  return TextStyle(
+                    fontSize: 16,
+                    fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                    color: isSelected
+                        ? RiqsiTheme.accentCyan
+                        : RiqsiTheme.textSecondary,
+                  );
+                }),
+                iconTheme: WidgetStateProperty.resolveWith((states) {
+                  final isSelected = states.contains(WidgetState.selected);
+                  return IconThemeData(
+                    size: 32,
+                    color: isSelected
+                        ? RiqsiTheme.accentCyan
+                        : RiqsiTheme.textSecondary,
+                  );
+                }),
+              ),
+              child: NavigationBar(
+                height: 80,
+                backgroundColor: Colors.transparent,
+                selectedIndex: state.currentTab,
+                onDestinationSelected: (index) {
+                  state.setTab(index);
+                  String tabName = "";
+                  if (index == 0) tabName = "Inicio, Asistente Visual";
+                  if (index == 1) tabName = "Mapa y Navegación Asistida";
+                  if (index == 2) tabName = "Configuración y Perfil";
+                  speakUi(context, "Pestaña $tabName seleccionada.");
+                  state.vibrate(40);
+                },
+                destinations: const [
+                  NavigationDestination(
+                    icon: Icon(Icons.remove_red_eye_outlined),
+                    selectedIcon: Icon(Icons.remove_red_eye_rounded),
+                    label: "Inicio",
+                    tooltip: "Inicio, asistente visual",
+                  ),
+                  NavigationDestination(
+                    icon: Icon(Icons.map_outlined),
+                    selectedIcon: Icon(Icons.map_rounded),
+                    label: "Mapa",
+                    tooltip: "Mapa y Navegación Asistida",
+                  ),
+                  NavigationDestination(
+                    icon: Icon(Icons.person_outline_rounded),
+                    selectedIcon: Icon(Icons.person_rounded),
+                    label: "Perfil",
+                    tooltip: "Perfil y Configuración",
+                  ),
+                ],
+              ),
             ),
           ),
         ),
