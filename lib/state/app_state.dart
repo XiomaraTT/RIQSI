@@ -1,10 +1,20 @@
-import 'package:flutter/material.dart';
 import 'dart:async';
+import 'dart:collection';
+import 'dart:math' as math;
+
+import 'package:flutter/material.dart';
 
 // Domain Entities
 import '../features/assistant/domain/entities/detection_event.dart';
+import '../features/assistant/domain/entities/vision_connection_event.dart';
 import '../features/settings/domain/entities/app_settings.dart';
 import '../features/map/domain/entities/navigation_step.dart';
+
+// Domain Repositories
+import '../features/assistant/domain/repositories/tts_repository.dart';
+import '../features/assistant/domain/repositories/vibration_repository.dart';
+import '../features/history/domain/repositories/history_repository.dart';
+import '../features/settings/domain/repositories/settings_repository.dart';
 
 // Data Layers
 import '../features/assistant/data/datasources/websocket_datasource.dart';
@@ -27,6 +37,8 @@ import '../features/settings/domain/usecases/save_settings.dart';
 
 export '../features/assistant/domain/entities/detected_object.dart';
 export '../features/assistant/domain/entities/detection_event.dart';
+export '../features/assistant/domain/repositories/tts_repository.dart'
+    show SpeechPriority;
 export '../features/settings/domain/entities/app_settings.dart';
 export '../features/map/domain/entities/navigation_step.dart';
 
@@ -44,14 +56,34 @@ enum AssistanceState {
   riskDetected
 }
 
+/// Estado de la conexión con el servidor de visión.
+enum ServerConnectionStatus {
+  /// Asistencia detenida: no hay conexión ni se intenta.
+  idle,
+
+  /// Primer intento de conexión tras iniciar la asistencia.
+  connecting,
+
+  /// Canal abierto.
+  connected,
+
+  /// Conexión perdida; reintentando con backoff.
+  reconnecting,
+}
+
 class AppState extends ChangeNotifier {
+  // Tiempos (ajustables en tests)
+  static const Duration watchdogTimeout = Duration(seconds: 5);
+  static const Duration highRiskRepeatInterval = Duration(seconds: 4);
+  static const int maxHistoryEntries = HistoryRepository.maxEntries;
+
   // Infrastructure references
   late final WebSocketDataSource _webSocketDataSource;
   late final VisionRepositoryImpl _visionRepository;
-  late final TtsRepositoryImpl _ttsRepository;
-  late final VibrationRepositoryImpl _vibrationRepository;
-  late final HistoryRepositoryImpl _historyRepository;
-  late final SettingsRepositoryImpl _settingsRepository;
+  late final TtsRepository _ttsRepository;
+  late final VibrationRepository _vibrationRepository;
+  late final HistoryRepository _historyRepository;
+  late final SettingsRepository _settingsRepository;
   late final NavigationRepositoryImpl _navigationRepository;
 
   // Use case references
@@ -67,20 +99,41 @@ class AppState extends ChangeNotifier {
   // Presentation State
   AppScreen currentScreen = AppScreen.splash;
   int currentTab = 0; // 0: Inicio, 1: Historial, 2: Perfil
-  
+
   AppSettings? _settings;
-  List<DetectionEvent> _cachedHistory = [];
-  StreamSubscription<DetectionEvent>? _detectionSubscription;
-  
+  final List<DetectionEvent> _cachedHistory = [];
+  late final Future<void> _ready;
+  bool _onboardingSeen = false;
+
   AssistanceState assistanceState = AssistanceState.inactive;
   String currentStatusMessage = "Riqsi está listo";
   String lastSpokenDescription = "";
-  
+
   bool hasCameraPermission = true;
   bool isCameraError = false;
-  bool isConnected = true;
   bool isImmersiveMode = false;
   DetectionEvent? activeDetection;
+
+  // Conexión con el servidor de visión
+  ServerConnectionStatus connectionStatus = ServerConnectionStatus.idle;
+  bool _simulatedOffline = false;
+  bool _connectionLostAnnounced = false;
+  int _reconnectAttempt = 0;
+  bool _frameInFlight = false;
+  DateTime? _awaitingReplySince;
+
+  // Anti-repetición de alertas de riesgo Alto cuando announce_voice=false
+  String? _lastHighRiskKey;
+  DateTime? _lastHighRiskSpokenAt;
+
+  // Timers y suscripciones (todos cancelables en dispose)
+  Timer? _splashTimer;
+  Timer? _autoClearTimer;
+  Timer? _reconnectTimer;
+  Timer? _watchdogTimer;
+  StreamSubscription<DetectionEvent>? _detectionSubscription;
+  StreamSubscription<VisionConnectionEvent>? _connectionSubscription;
+  bool _disposed = false;
 
   // Navigation State (Pestaña Mapa para guía accesible)
   NavigationStep? currentNavStep;
@@ -99,18 +152,49 @@ class AppState extends ChangeNotifier {
   String get language => _settings?.language ?? 'Español';
   String get userName => _settings?.userName ?? 'María González';
   String get serverIp => _settings?.serverIp ?? '10.247.64.45';
-  List<DetectionEvent> get history => List.unmodifiable(_cachedHistory);
+
+  /// Historial (más reciente primero, máx. 100). Vista de solo lectura, sin
+  /// copiar la lista en cada evento.
+  List<DetectionEvent> get history => UnmodifiableListView(_cachedHistory);
   String get navigationApiUrl => _navigationRepository.getApiUrl();
 
-  AppState() {
+  /// true salvo que la conexión con el servidor esté caída (reconectando).
+  bool get isConnected =>
+      !_simulatedOffline &&
+      connectionStatus != ServerConnectionStatus.reconnecting;
+
+  bool get isReconnecting =>
+      connectionStatus == ServerConnectionStatus.reconnecting;
+
+  /// true cuando la cámara debe capturar y enviar frames.
+  bool get canStreamFrames =>
+      assistanceState != AssistanceState.inactive &&
+      connectionStatus == ServerConnectionStatus.connected &&
+      !_simulatedOffline;
+
+  bool get onboardingSeen => _onboardingSeen;
+
+  /// Volumen usado para alertas de peligro: nunca silencio, aunque el
+  /// usuario haya silenciado la voz.
+  double get alertVolume => volume <= 0.01 ? 1.0 : math.max(volume, 0.6);
+
+  AppState({
+    WebSocketDataSource? webSocketDataSource,
+    TtsRepository? ttsRepository,
+    VibrationRepository? vibrationRepository,
+    HistoryRepository? historyRepository,
+    SettingsRepository? settingsRepository,
+    NavigationRepositoryImpl? navigationRepository,
+    Duration splashDuration = const Duration(seconds: 3),
+  }) {
     // DI setup
-    _webSocketDataSource = WebSocketDataSource();
+    _webSocketDataSource = webSocketDataSource ?? WebSocketDataSource();
     _visionRepository = VisionRepositoryImpl(_webSocketDataSource);
-    _ttsRepository = TtsRepositoryImpl();
-    _vibrationRepository = VibrationRepositoryImpl();
-    _historyRepository = HistoryRepositoryImpl();
-    _settingsRepository = SettingsRepositoryImpl();
-    _navigationRepository = NavigationRepositoryImpl();
+    _ttsRepository = ttsRepository ?? TtsRepositoryImpl();
+    _vibrationRepository = vibrationRepository ?? VibrationRepositoryImpl();
+    _historyRepository = historyRepository ?? HistoryRepositoryImpl();
+    _settingsRepository = settingsRepository ?? SettingsRepositoryImpl();
+    _navigationRepository = navigationRepository ?? NavigationRepositoryImpl();
 
     _toggleAssistance = ToggleAssistance(_visionRepository);
     _streamFrame = StreamFrame(_visionRepository);
@@ -121,24 +205,64 @@ class AppState extends ChangeNotifier {
     _getSettings = GetSettings(_settingsRepository);
     _saveSettings = SaveSettings(_settingsRepository);
 
+    // Una sola suscripción para toda la vida de AppState: no hay carreras
+    // entre conexiones (los eventos de canales viejos ya los filtra el
+    // datasource y aquí se ignoran si la asistencia está detenida).
+    _detectionSubscription =
+        _visionRepository.detections.listen(_handleDetectionEvent);
+    _connectionSubscription =
+        _visionRepository.connectionEvents.listen(_handleConnectionEvent);
+
     _initNavigation();
-    _init();
+    _ready = _init();
 
     // Start splash screen countdown
-    Timer(const Duration(seconds: 3), () {
-      navigateToScreen(AppScreen.onboarding);
+    _splashTimer = Timer(splashDuration, () async {
+      await _ready;
+      if (_disposed || currentScreen != AppScreen.splash) return;
+      navigateToScreen(
+          _onboardingSeen ? AppScreen.mainLayout : AppScreen.onboarding);
     });
   }
 
+  /// Completa cuando se cargaron ajustes, historial y flag de onboarding.
+  Future<void> get ready => _ready;
+
   Future<void> _init() async {
-    _settings = await _getSettings.execute();
-    _cachedHistory = await _getHistory.execute();
+    try {
+      final loaded = await _getSettings.execute();
+      // Si el usuario cambió algo antes de terminar la carga, se respeta.
+      _settings ??= loaded;
+      _onboardingSeen = await _settingsRepository.isOnboardingSeen();
+      final stored = await _getHistory.execute();
+      _cachedHistory
+        ..clear()
+        ..addAll(stored.where((e) => !e.isClear).take(maxHistoryEntries));
+    } catch (e) {
+      debugPrint('[APP] Error cargando datos locales: $e');
+    }
     notifyListeners();
+  }
+
+  @override
+  void notifyListeners() {
+    if (_disposed) return;
+    super.notifyListeners();
   }
 
   void navigateToScreen(AppScreen screen) {
     currentScreen = screen;
+    if (screen == AppScreen.mainLayout && !_onboardingSeen) {
+      // Llegar a la pantalla principal marca el onboarding como visto.
+      completeOnboarding();
+    }
     notifyListeners();
+  }
+
+  /// Marca el onboarding como visto (persistido) para no repetirlo.
+  Future<void> completeOnboarding() async {
+    _onboardingSeen = true;
+    await _settingsRepository.setOnboardingSeen(true);
   }
 
   void setTab(int index) {
@@ -147,67 +271,128 @@ class AppState extends ChangeNotifier {
   }
 
   // Settings update wrappers
+  AppSettings get _currentSettings => _settings ?? AppSettings.defaults;
+
   Future<void> _updateSettings(AppSettings newSettings) async {
     _settings = newSettings;
-    await _saveSettings.execute(newSettings);
     notifyListeners();
+    await _saveSettings.execute(newSettings);
   }
 
   void updateVoiceSpeed(double val) {
-    if (_settings != null) {
-      _updateSettings(_settings!.copyWith(voiceSpeed: val));
-    }
+    _updateSettings(_currentSettings.copyWith(voiceSpeed: val));
   }
 
   void updateVolume(double val) {
-    if (_settings != null) {
-      _updateSettings(_settings!.copyWith(volume: val));
-    }
+    _updateSettings(_currentSettings.copyWith(volume: val));
   }
 
   void toggleVibration(bool val) {
-    if (_settings != null) {
-      _updateSettings(_settings!.copyWith(vibrationEnabled: val));
-    }
+    _updateSettings(_currentSettings.copyWith(vibrationEnabled: val));
+    if (!val) _vibrationRepository.stop();
   }
 
   void updateAlertFrequency(String val) {
-    if (_settings != null) {
-      _updateSettings(_settings!.copyWith(alertFrequency: val));
-    }
+    _updateSettings(_currentSettings.copyWith(alertFrequency: val));
   }
 
   void updateSensitivity(String val) {
-    if (_settings != null) {
-      _updateSettings(_settings!.copyWith(sensitivity: val));
-    }
+    _updateSettings(_currentSettings.copyWith(sensitivity: val));
   }
-  
+
   void updateUserName(String val) {
-    if (_settings != null) {
-      _updateSettings(_settings!.copyWith(userName: val));
+    _updateSettings(_currentSettings.copyWith(userName: val));
+  }
+
+  /// Valida una dirección de servidor (IPv4 o nombre de equipo, sin esquema
+  /// ni puerto). Devuelve null si es válida o un mensaje de error en español.
+  static String? validateServerAddress(String raw) {
+    final v = raw.trim();
+    if (v.isEmpty) {
+      return 'La dirección del servidor no puede estar vacía.';
+    }
+    if (v.length > 253) {
+      return 'La dirección del servidor es demasiado larga.';
+    }
+    if (RegExp(r'^[0-9.]+$').hasMatch(v)) {
+      final parts = v.split('.');
+      final ok = parts.length == 4 &&
+          parts.every((p) =>
+              p.isNotEmpty && p.length <= 3 && int.parse(p) <= 255);
+      return ok
+          ? null
+          : 'La dirección IP no es válida. Usa el formato 192.168.1.15.';
+    }
+    final label = RegExp(r'^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$');
+    if (v.split('.').every(label.hasMatch)) return null;
+    return 'La dirección no es válida. Escribe una IP como 192.168.1.15 '
+        'o un nombre de equipo, sin http ni puerto.';
+  }
+
+  /// Cambia la dirección del servidor. Devuelve null si se aplicó o el
+  /// mensaje de error (también se anuncia por voz) si no es válida.
+  /// Si la asistencia está activa, reconecta con la nueva dirección.
+  String? updateServerIp(String val) {
+    final error = validateServerAddress(val);
+    if (error != null) {
+      speak(error);
+      return error;
+    }
+    final host = val.trim();
+    _updateSettings(_currentSettings.copyWith(serverIp: host));
+    speak("Servidor configurado en la dirección $host");
+
+    if (assistanceState != AssistanceState.inactive) {
+      _reconnectAttempt = 0;
+      _awaitingReplySince = null;
+      if (connectionStatus == ServerConnectionStatus.connected) {
+        connectionStatus = ServerConnectionStatus.connecting;
+      }
+      _openConnection();
+    }
+    notifyListeners();
+    return null;
+  }
+
+  // ==========================================
+  // FRAMES Y VOZ
+  // ==========================================
+
+  /// Envía un frame al servidor. No acumula: si el anterior aún no terminó
+  /// de entregarse, o no hay conexión, devuelve false sin enviar.
+  Future<bool> sendFrameBytes(List<int> bytes) async {
+    if (!canStreamFrames || _frameInFlight) return false;
+    _frameInFlight = true;
+    try {
+      final sent = await _streamFrame.execute(bytes);
+      if (sent) _awaitingReplySince ??= DateTime.now();
+      return sent;
+    } catch (err) {
+      debugPrint("[APP] Error enviando frame: $err");
+      return false;
+    } finally {
+      _frameInFlight = false;
     }
   }
 
-  void updateServerIp(String val) {
-    if (_settings != null) {
-      _updateSettings(_settings!.copyWith(serverIp: val));
-      speak("Servidor configurado en la dirección IP $val");
-    }
-  }
-
-  void sendFrameBytes(List<int> bytes) {
-    if (isConnected && assistanceState != AssistanceState.inactive) {
-      _streamFrame.execute(bytes).catchError((err) {
-        print("Error streaming frame: $err");
-      });
-    }
-  }
-
+  /// Frase normal de interfaz. Respeta el silencio (volumen 0) del usuario y
+  /// no corta una alerta de peligro en curso.
   void speak(String text) {
+    if (text.trim().isEmpty) return;
     lastSpokenDescription = text;
     notifyListeners();
+    if (volume <= 0.01) return; // voz silenciada por el usuario
     _speakText.execute(text, voiceSpeed, volume);
+  }
+
+  /// Alerta de peligro: interrumpe cualquier frase normal y suena aunque el
+  /// usuario haya silenciado la voz.
+  void speakAlert(String text) {
+    if (text.trim().isEmpty) return;
+    lastSpokenDescription = text;
+    notifyListeners();
+    _speakText.execute(text, voiceSpeed, alertVolume,
+        priority: SpeechPriority.alert);
   }
 
   void testVoice() {
@@ -227,19 +412,30 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  // ==========================================
+  // ASISTENCIA Y CONEXIÓN
+  // ==========================================
+
   void toggleAssistance() {
     if (assistanceState == AssistanceState.inactive) {
       assistanceState = AssistanceState.analyzing;
       currentStatusMessage = "Analizando entorno...";
+      connectionStatus = ServerConnectionStatus.connecting;
+      _connectionLostAnnounced = false;
+      _reconnectAttempt = 0;
+      _awaitingReplySince = null;
       speak("Asistencia iniciada. Conectando al servidor de visión.");
       vibrate(150);
-      _connectWebSocket();
+      _startWatchdog();
+      _openConnection();
     } else {
-      _disconnectWebSocket();
+      _closeConnection();
       _vibrationRepository.stop(); // Detener vibración en bucle
+      _autoClearTimer?.cancel();
       assistanceState = AssistanceState.inactive;
       currentStatusMessage = "Riqsi está listo";
       activeDetection = null;
+      _speakText.stop();
       speak("Asistencia detenida.");
       vibrate(100);
     }
@@ -272,51 +468,114 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  void _connectWebSocket() {
-    _disconnectWebSocket();
-    isConnected = true;
-    notifyListeners();
+  /// Retardo de reconexión: 1, 2, 4, 8 s y luego 10 s como máximo.
+  static Duration reconnectDelayFor(int attempt) {
+    const steps = [1, 2, 4, 8];
+    final seconds = attempt < steps.length ? steps[attempt] : 10;
+    return Duration(seconds: seconds);
+  }
 
-    _toggleAssistance.connect(serverIp).then((_) {
-      _detectionSubscription = _visionRepository.detections.listen(
-        (event) {
-          _handleDetectionEvent(event);
-        },
-        onError: (error) {
-          print("WebSocket error: $error");
-          _handleWsDisconnect(true);
-        },
-        onDone: () {
-          print("WebSocket done");
-          _handleWsDisconnect(false);
-        },
-      );
-      print("WebSocket connected successfully");
-    }).catchError((err) {
-      print("WebSocket connect error: $err");
-      _handleWsDisconnect(true);
+  void _openConnection() {
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    _toggleAssistance.connect(serverIp).catchError((Object err) {
+      debugPrint("[APP] Error conectando al servidor: $err");
+      _handleConnectionLost();
     });
   }
 
-  void _disconnectWebSocket() {
-    _detectionSubscription?.cancel();
-    _detectionSubscription = null;
+  void _closeConnection() {
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    _watchdogTimer?.cancel();
+    _watchdogTimer = null;
+    _awaitingReplySince = null;
+    _connectionLostAnnounced = false;
+    _reconnectAttempt = 0;
+    connectionStatus = ServerConnectionStatus.idle;
     _toggleAssistance.disconnect();
   }
 
-  void _handleWsDisconnect(bool isError) {
-    _disconnectWebSocket();
-    isConnected = false;
-    
-    if (assistanceState != AssistanceState.inactive) {
-      currentStatusMessage = isError ? "Servidor sin conexión" : "Servidor desconectado";
-      speak(isError ? "Conexión con el servidor de visión perdida." : "Servidor de visión desconectado.");
+  void _handleConnectionEvent(VisionConnectionEvent event) {
+    if (assistanceState == AssistanceState.inactive) return;
+    if (event.isConnected) {
+      debugPrint("[APP] Conectado al servidor de visión");
+      _reconnectTimer?.cancel();
+      _reconnectTimer = null;
+      _reconnectAttempt = 0;
+      _awaitingReplySince = null;
+      connectionStatus = ServerConnectionStatus.connected;
+      if (_connectionLostAnnounced) {
+        _connectionLostAnnounced = false;
+        currentStatusMessage = "Analizando entorno...";
+        speak("Conexión recuperada.");
+        vibrate(100);
+      }
       notifyListeners();
+    } else {
+      debugPrint("[APP] Conexión cerrada: ${event.error ?? 'cierre limpio'}");
+      _handleConnectionLost();
+    }
+  }
+
+  void _handleConnectionLost() {
+    if (assistanceState == AssistanceState.inactive) return;
+    connectionStatus = ServerConnectionStatus.reconnecting;
+    _awaitingReplySince = null;
+    _vibrationRepository.stop(); // la proximidad anterior ya no es fiable
+    currentStatusMessage = "Sin conexión. Reconectando...";
+    if (!_connectionLostAnnounced) {
+      // Se anuncia una sola vez por caída, no en cada reintento.
+      _connectionLostAnnounced = true;
+      speakAlert("Sin conexión con el servidor. Intentando reconectar.");
+      vibrate(400);
+    }
+    _scheduleReconnect();
+    notifyListeners();
+  }
+
+  void _scheduleReconnect() {
+    if (_reconnectTimer?.isActive ?? false) return;
+    final delay = reconnectDelayFor(_reconnectAttempt);
+    _reconnectAttempt++;
+    debugPrint("[APP] Reintento de conexión en ${delay.inSeconds} s");
+    _reconnectTimer = Timer(delay, () {
+      _reconnectTimer = null;
+      if (_disposed || assistanceState == AssistanceState.inactive) return;
+      _openConnection();
+    });
+  }
+
+  /// Watchdog: si se enviaron frames y el servidor no responde nada en
+  /// [watchdogTimeout], se da la conexión por perdida. (Se mide desde el
+  /// primer frame sin respuesta, para no dar falsos positivos cuando la
+  /// cámara no está enviando; los sockets muertos sin tráfico los detecta
+  /// el ping del canal.)
+  void _startWatchdog() {
+    _watchdogTimer?.cancel();
+    _watchdogTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      checkWatchdog();
+    });
+  }
+
+  @visibleForTesting
+  void checkWatchdog([DateTime? now]) {
+    if (assistanceState == AssistanceState.inactive ||
+        connectionStatus != ServerConnectionStatus.connected) {
+      return;
+    }
+    final since = _awaitingReplySince;
+    if (since == null) return;
+    if ((now ?? DateTime.now()).difference(since) >= watchdogTimeout) {
+      debugPrint("[APP] Watchdog: el servidor no responde");
+      _toggleAssistance.disconnect();
+      _handleConnectionLost();
     }
   }
 
   void _handleDetectionEvent(DetectionEvent event) {
-    isConnected = true;
+    if (assistanceState == AssistanceState.inactive) return;
+    _awaitingReplySince = null; // el servidor está vivo
 
     if (vibrationEnabled) {
       _vibrationRepository.triggerProximityFeedback(event.distancia);
@@ -324,7 +583,11 @@ class AppState extends ChangeNotifier {
       _vibrationRepository.stop();
     }
 
-    if (event.riskLevel == "Alto") {
+    // 'clear' solo sirve para frenar la vibración: no cambia la pantalla
+    // ni se guarda en el historial.
+    if (event.isClear) return;
+
+    if (event.isHighRisk) {
       triggerHighRiskAlert(event);
     } else {
       triggerObjectDetection(event);
@@ -336,22 +599,13 @@ class AppState extends ChangeNotifier {
     currentStatusMessage = "${event.label} detectado";
     activeDetection = event;
 
-    _addHistory.execute(event).then((_) => _refreshHistory());
-
-    // Solo hablar si detector.py indicó anunciar voz
+    // Solo hablar (y guardar) si el servidor indicó anunciar voz
     if (event.announceVoice && event.description.isNotEmpty) {
       speak(event.description);
+      _recordHistory(event);
     }
 
-    Timer(const Duration(seconds: 4), () {
-      if (assistanceState == AssistanceState.objectDetected && activeDetection?.id == event.id) {
-        assistanceState = AssistanceState.analyzing;
-        currentStatusMessage = "Analizando entorno...";
-        activeDetection = null;
-        notifyListeners();
-      }
-    });
-
+    _scheduleAutoClear(event, const Duration(seconds: 4));
     notifyListeners();
   }
 
@@ -360,40 +614,111 @@ class AppState extends ChangeNotifier {
     currentStatusMessage = "¡Cuidado! Peligro detectado";
     activeDetection = event;
 
-    _addHistory.execute(event).then((_) => _refreshHistory());
-
-    // Solo hablar si detector.py indicó anunciar voz
-    if (event.announceVoice && event.description.isNotEmpty) {
-      speak(event.description);
+    if (_shouldAnnounceHighRisk(event)) {
+      final text = event.description.isNotEmpty
+          ? event.description
+          : "¡Cuidado! ${event.label} ${event.relativePosition}".trim();
+      speakAlert(text);
+      _recordHistory(event);
     }
 
+    _scheduleAutoClear(event, const Duration(milliseconds: 4500));
     notifyListeners();
+  }
 
-    Timer(const Duration(milliseconds: 4500), () {
-      if (assistanceState == AssistanceState.riskDetected && activeDetection?.id == event.id) {
+  /// El riesgo Alto siempre se anuncia aunque announce_voice sea false
+  /// (el cooldown del servidor es para Medio/Bajo). Para no repetir la
+  /// misma alerta en cada frame, se limita localmente a una vez cada
+  /// [highRiskRepeatInterval] por objeto/posición.
+  bool _shouldAnnounceHighRisk(DetectionEvent event, [DateTime? now]) {
+    final t = now ?? DateTime.now();
+    final key = "${event.label}|${event.relativePosition}";
+    final last = _lastHighRiskSpokenAt;
+    final repeated = key == _lastHighRiskKey &&
+        last != null &&
+        t.difference(last) < highRiskRepeatInterval;
+    if (repeated && !event.announceVoice) return false;
+    _lastHighRiskKey = key;
+    _lastHighRiskSpokenAt = t;
+    return true;
+  }
+
+  void _recordHistory(DetectionEvent event) {
+    if (event.isClear) return;
+    _cachedHistory.insert(0, event);
+    if (_cachedHistory.length > maxHistoryEntries) {
+      _cachedHistory.removeRange(maxHistoryEntries, _cachedHistory.length);
+    }
+    _addHistory.execute(event).catchError((Object e) {
+      debugPrint("[APP] No se pudo guardar en el historial: $e");
+    });
+  }
+
+  /// Un único timer cancelable para volver a "Analizando" tras un evento.
+  void _scheduleAutoClear(DetectionEvent event, Duration after) {
+    _autoClearTimer?.cancel();
+    _autoClearTimer = Timer(after, () {
+      if (activeDetection?.id != event.id) return;
+      if (assistanceState == AssistanceState.objectDetected ||
+          assistanceState == AssistanceState.riskDetected) {
         assistanceState = AssistanceState.analyzing;
-        currentStatusMessage = "Analizando entorno...";
+        currentStatusMessage = isReconnecting
+            ? "Sin conexión. Reconectando..."
+            : "Analizando entorno...";
         activeDetection = null;
         notifyListeners();
       }
     });
   }
 
-  Future<void> _refreshHistory() async {
-    _cachedHistory = await _getHistory.execute();
+  void dismissAlert() {
+    _autoClearTimer?.cancel();
+    activeDetection = null;
+    if (assistanceState == AssistanceState.inactive) {
+      notifyListeners();
+      return;
+    }
+    assistanceState = AssistanceState.analyzing;
+    currentStatusMessage = "Analizando entorno...";
+    speak("Alerta entendida. Reanudando asistencia.");
+    vibrate(100);
+
+    if (isReconnecting) {
+      // Reintento inmediato en lugar de esperar al backoff.
+      _reconnectAttempt = 0;
+      _openConnection();
+    }
     notifyListeners();
   }
 
-  void dismissAlert() {
-    assistanceState = AssistanceState.analyzing;
-    currentStatusMessage = "Analizando entorno...";
-    activeDetection = null;
-    speak("Alerta entendida. Reanudando asistencia.");
-    vibrate(100);
-    
-    if (!isConnected) {
-      _connectWebSocket();
-    }
+  // ==========================================
+  // CÁMARA
+  // ==========================================
+
+  /// La cámara se inicializó correctamente.
+  void reportCameraReady() {
+    if (hasCameraPermission && !isCameraError) return;
+    hasCameraPermission = true;
+    isCameraError = false;
+    notifyListeners();
+  }
+
+  /// El sistema denegó el permiso de cámara.
+  void reportCameraPermissionDenied() {
+    if (!hasCameraPermission) return;
+    hasCameraPermission = false;
+    isCameraError = false;
+    speak("No hay permiso de cámara. Actívalo en los ajustes del teléfono "
+        "para que Riqsi pueda ver tu entorno.");
+    notifyListeners();
+  }
+
+  /// La cámara falló (inicialización o capturas seguidas).
+  void reportCameraError([String? detail]) {
+    if (detail != null) debugPrint("[APP] Error de cámara: $detail");
+    if (isCameraError) return;
+    isCameraError = true;
+    speak("Problema con la cámara. Reintentando.");
     notifyListeners();
   }
 
@@ -403,8 +728,23 @@ class AppState extends ChangeNotifier {
   }
 
   void simulateOffline() {
-    isConnected = !isConnected;
+    _simulatedOffline = !_simulatedOffline;
     notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    _splashTimer?.cancel();
+    _autoClearTimer?.cancel();
+    _reconnectTimer?.cancel();
+    _watchdogTimer?.cancel();
+    _detectionSubscription?.cancel();
+    _connectionSubscription?.cancel();
+    _vibrationRepository.dispose();
+    _ttsRepository.stop();
+    _visionRepository.dispose();
+    super.dispose();
   }
 
   // ==========================================
