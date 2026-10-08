@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../../../../core/accessibility/ui_speech.dart';
 import '../../../../core/theme/riqsi_theme.dart';
 import '../../../../state/app_state.dart';
 import '../../../assistant/presentation/widgets/accessible_button.dart';
@@ -14,6 +15,19 @@ class OnboardingScreen extends StatefulWidget {
 class _OnboardingScreenState extends State<OnboardingScreen> {
   final PageController _pageController = PageController();
   int _currentPage = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    // La primera página también debe leerse al abrirse.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      announceUi(
+        context,
+        "Bienvenido a Riqsi. Paso 1 de 3: Conoce tu entorno.",
+      );
+    });
+  }
 
   @override
   void dispose() {
@@ -34,7 +48,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   void _finishOnboarding(AppState state) {
     state.navigateToScreen(AppScreen.initialConfig);
-    state.speak("Bienvenido a Riqsi. Por favor, configure sus preferencias de voz y accesibilidad.");
+    speakUi(
+      context,
+      "Bienvenido a Riqsi. Por favor, configure sus preferencias de voz y accesibilidad.",
+    );
   }
 
   @override
@@ -51,21 +68,30 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               child: Padding(
                 padding: const EdgeInsets.all(16.0),
                 child: _currentPage < 2
-                    ? TextButton(
-                        onPressed: () => _finishOnboarding(state),
-                        child: const Text(
-                          "Omitir",
-                          style: TextStyle(
-                            color: RiqsiTheme.accentCyan,
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
+                    ? Semantics(
+                        button: true,
+                        label: "Omitir introducción",
+                        excludeSemantics: true,
+                        onTap: () => _finishOnboarding(state),
+                        child: TextButton(
+                          style: TextButton.styleFrom(
+                            minimumSize: const Size(64, 48),
+                          ),
+                          onPressed: () => _finishOnboarding(state),
+                          child: const Text(
+                            "Omitir",
+                            style: TextStyle(
+                              color: RiqsiTheme.accentCyan,
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
                         ),
                       )
                     : const SizedBox(height: 48),
               ),
             ),
-            
+
             // Onboarding Pages Content
             Expanded(
               child: PageView(
@@ -76,27 +102,33 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   });
                   // Accessible announcement when switching slides
                   if (page == 0) {
-                    state.speak("Paso 1: Conoce tu entorno.");
+                    announceUi(context, "Paso 1 de 3: Conoce tu entorno.");
                   } else if (page == 1) {
-                    state.speak("Paso 2: Escucha lo que Riqsi detecta.");
+                    announceUi(
+                      context,
+                      "Paso 2 de 3: Escucha lo que Riqsi detecta.",
+                    );
                   } else {
-                    state.speak("Paso 3: Muévete con confianza.");
+                    announceUi(context, "Paso 3 de 3: Muévete con confianza.");
                   }
                 },
                 children: [
                   _buildPage(
                     title: "Conoce tu entorno",
-                    description: "Riqsi utiliza la cámara de tu celular para identificar los elementos y objetos a tu alrededor.",
+                    description:
+                        "Riqsi utiliza la cámara de tu celular para identificar los elementos y objetos a tu alrededor.",
                     illustration: _buildCameraIllustration(),
                   ),
                   _buildPage(
                     title: "Escucha lo que Riqsi detecta",
-                    description: "La aplicación te comunicará qué objetos o personas hay en tu entorno principalmente mediante voz y vibraciones.",
+                    description:
+                        "La aplicación te comunicará qué objetos o personas hay en tu entorno principalmente mediante voz y vibraciones.",
                     illustration: _buildVoiceIllustration(),
                   ),
                   _buildPage(
                     title: "Muévete con confianza",
-                    description: "Riqsi te guiará reconociendo obstáculos, puertas y escalones para que te desplaces de forma segura.",
+                    description:
+                        "Riqsi te guiará reconociendo obstáculos, puertas y escalones para que te desplaces de forma segura.",
                     illustration: _buildConfidenceIllustration(),
                   ),
                 ],
@@ -106,15 +138,22 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             // Pagination Dots indicator
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 24.0),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: List.generate(3, (index) => _buildDot(index)),
+              child: Semantics(
+                label: "Página ${_currentPage + 1} de 3",
+                excludeSemantics: true,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: List.generate(3, (index) => _buildDot(index)),
+                ),
               ),
             ),
 
             // Bottom Buttons
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 16.0),
+              padding: const EdgeInsets.symmetric(
+                horizontal: 24.0,
+                vertical: 16.0,
+              ),
               child: AccessibleButton(
                 label: _currentPage == 2 ? "Comenzar" : "Continuar",
                 onPressed: () => _goToNextPage(state),
@@ -134,29 +173,35 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     required String description,
     required Widget illustration,
   }) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 32.0),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Expanded(child: Center(child: illustration)),
-          const SizedBox(height: 32),
-          Text(
-            title,
-            style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
-            textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: 16),
-          Text(
-            description,
-            style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                  color: RiqsiTheme.textSecondary,
-                ),
-            textAlign: TextAlign.center,
-          ),
-        ],
+    return Semantics(
+      container: true,
+      liveRegion: true,
+      label: "$title. $description",
+      excludeSemantics: true,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 32.0),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Expanded(child: Center(child: illustration)),
+            const SizedBox(height: 32),
+            Text(
+              title,
+              style: Theme.of(
+                context,
+              ).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 16),
+            Text(
+              description,
+              style: Theme.of(
+                context,
+              ).textTheme.bodyLarge?.copyWith(color: RiqsiTheme.textSecondary),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -168,10 +213,14 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       height: 12,
       width: _currentPage == index ? 32 : 12,
       decoration: BoxDecoration(
-        color: _currentPage == index ? RiqsiTheme.accentCyan : RiqsiTheme.darkSurface,
+        color: _currentPage == index
+            ? RiqsiTheme.accentCyan
+            : RiqsiTheme.darkSurface,
         borderRadius: BorderRadius.circular(6),
         border: Border.all(
-          color: _currentPage == index ? RiqsiTheme.accentCyan : RiqsiTheme.textSecondary.withOpacity(0.5),
+          color: _currentPage == index
+              ? RiqsiTheme.accentCyan
+              : RiqsiTheme.textSecondary.withValues(alpha: 0.5),
           width: 1.5,
         ),
       ),
@@ -186,7 +235,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       decoration: BoxDecoration(
         color: RiqsiTheme.darkSurface,
         borderRadius: BorderRadius.circular(32),
-        border: Border.all(color: RiqsiTheme.accentCyan.withOpacity(0.3), width: 3),
+        border: Border.all(
+          color: RiqsiTheme.accentCyan.withValues(alpha: 0.3),
+          width: 3,
+        ),
       ),
       child: Stack(
         alignment: Alignment.center,
@@ -202,7 +254,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             right: 20,
             child: Icon(
               Icons.blur_on_rounded,
-              color: RiqsiTheme.accentCyan.withOpacity(0.5),
+              color: RiqsiTheme.accentCyan.withValues(alpha: 0.5),
               size: 32,
             ),
           ),
@@ -230,7 +282,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       decoration: BoxDecoration(
         color: RiqsiTheme.darkSurface,
         borderRadius: BorderRadius.circular(32),
-        border: Border.all(color: RiqsiTheme.accentCyan.withOpacity(0.3), width: 3),
+        border: Border.all(
+          color: RiqsiTheme.accentCyan.withValues(alpha: 0.3),
+          width: 3,
+        ),
       ),
       child: Center(
         child: Row(
@@ -269,7 +324,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       decoration: BoxDecoration(
         color: RiqsiTheme.darkSurface,
         borderRadius: BorderRadius.circular(32),
-        border: Border.all(color: RiqsiTheme.accentCyan.withOpacity(0.3), width: 3),
+        border: Border.all(
+          color: RiqsiTheme.accentCyan.withValues(alpha: 0.3),
+          width: 3,
+        ),
       ),
       child: Stack(
         alignment: Alignment.center,
