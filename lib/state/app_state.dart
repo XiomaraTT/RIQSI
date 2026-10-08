@@ -75,6 +75,11 @@ class AppState extends ChangeNotifier {
   // Tiempos (ajustables en tests)
   static const Duration watchdogTimeout = Duration(seconds: 5);
   static const Duration highRiskRepeatInterval = Duration(seconds: 4);
+
+  /// Mientras un frame no tenga respuesta, no se envía otro antes de este
+  /// intervalo (el servidor procesa solo el último: no tiene sentido
+  /// acumular frames en el socket).
+  static const Duration unansweredFrameInterval = Duration(milliseconds: 700);
   static const int maxHistoryEntries = HistoryRepository.maxEntries;
 
   // Infrastructure references
@@ -121,6 +126,7 @@ class AppState extends ChangeNotifier {
   int _reconnectAttempt = 0;
   bool _frameInFlight = false;
   DateTime? _awaitingReplySince;
+  DateTime? _lastFrameSentAt;
 
   // Anti-repetición de alertas de riesgo Alto cuando announce_voice=false
   String? _lastHighRiskKey;
@@ -166,11 +172,22 @@ class AppState extends ChangeNotifier {
   bool get isReconnecting =>
       connectionStatus == ServerConnectionStatus.reconnecting;
 
-  /// true cuando la cámara debe capturar y enviar frames.
-  bool get canStreamFrames =>
-      assistanceState != AssistanceState.inactive &&
-      connectionStatus == ServerConnectionStatus.connected &&
-      !_simulatedOffline;
+  /// true cuando la cámara debe capturar y enviar un frame ahora.
+  bool get canStreamFrames {
+    if (assistanceState == AssistanceState.inactive ||
+        connectionStatus != ServerConnectionStatus.connected ||
+        _simulatedOffline ||
+        _frameInFlight) {
+      return false;
+    }
+    final last = _lastFrameSentAt;
+    if (_awaitingReplySince != null &&
+        last != null &&
+        DateTime.now().difference(last) < unansweredFrameInterval) {
+      return false; // aún esperando respuesta al frame anterior
+    }
+    return true;
+  }
 
   bool get onboardingSeen => _onboardingSeen;
 
@@ -361,11 +378,15 @@ class AppState extends ChangeNotifier {
   /// Envía un frame al servidor. No acumula: si el anterior aún no terminó
   /// de entregarse, o no hay conexión, devuelve false sin enviar.
   Future<bool> sendFrameBytes(List<int> bytes) async {
-    if (!canStreamFrames || _frameInFlight) return false;
+    if (!canStreamFrames) return false;
     _frameInFlight = true;
     try {
       final sent = await _streamFrame.execute(bytes);
-      if (sent) _awaitingReplySince ??= DateTime.now();
+      if (sent) {
+        final now = DateTime.now();
+        _lastFrameSentAt = now;
+        _awaitingReplySince ??= now;
+      }
       return sent;
     } catch (err) {
       debugPrint("[APP] Error enviando frame: $err");
