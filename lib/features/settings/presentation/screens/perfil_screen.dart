@@ -13,29 +13,6 @@ String formatSpeed(double speed) {
   return "${isInt ? speed.toStringAsFixed(0) : speed.toString()}x";
 }
 
-/// Valida un servidor: IPv4 (octetos 0-255) u nombre de host. Devuelve un
-/// mensaje de error en español o null si es válido.
-String? validateServerHost(String raw) {
-  final v = raw.trim();
-  if (v.isEmpty) return "Escribe la dirección del servidor.";
-  final ipLike = RegExp(r'^\d+(\.\d+){3}$');
-  if (ipLike.hasMatch(v)) {
-    final ok = v.split('.').every((p) {
-      final n = int.tryParse(p);
-      return n != null && n >= 0 && n <= 255;
-    });
-    return ok
-        ? null
-        : "La dirección IP no es válida. Cada número debe estar entre 0 y 255.";
-  }
-  final host = RegExp(
-    r'^(?=.{1,253}$)[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$',
-  );
-  return host.hasMatch(v)
-      ? null
-      : "Escribe una IP como 192.168.1.15 o un nombre de host válido.";
-}
-
 class PerfilScreen extends StatelessWidget {
   const PerfilScreen({super.key});
 
@@ -401,7 +378,7 @@ class PerfilScreen extends StatelessWidget {
         hint: "Ej: 192.168.1.15 o 10.0.2.2",
         initialValue: state.serverIp,
         keyboardType: TextInputType.url,
-        validator: validateServerHost,
+        validator: AppState.validateServerAddress,
         onSave: (v) => state.updateServerIp(v.trim()),
       ),
     );

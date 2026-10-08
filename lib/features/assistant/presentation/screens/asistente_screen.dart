@@ -127,17 +127,17 @@ class _AsistenteScreenState extends State<AsistenteScreen> {
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(color: RiqsiTheme.alertMedium),
               ),
-              child: const Row(
+              child: Row(
                 children: [
-                  Icon(
+                  const Icon(
                     Icons.wifi_off_rounded,
                     size: 14,
                     color: RiqsiTheme.alertMedium,
                   ),
-                  SizedBox(width: 4),
+                  const SizedBox(width: 4),
                   Text(
-                    "OFFLINE",
-                    style: TextStyle(
+                    state.isReconnecting ? "RECONECTANDO" : "OFFLINE",
+                    style: const TextStyle(
                       color: RiqsiTheme.alertMedium,
                       fontWeight: FontWeight.bold,
                       fontSize: 12,
