@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
+import '../../../../core/accessibility/a11y_tap.dart';
+import '../../../../core/accessibility/ui_speech.dart';
 import '../../../../core/theme/riqsi_theme.dart';
 import '../../../../state/app_state.dart';
 import '../../data/datasources/navigation_api_datasource.dart';
@@ -38,6 +40,7 @@ class _MapaScreenState extends State<MapaScreen> {
   @override
   void dispose() {
     _searchController.dispose();
+    _mapController.dispose();
     super.dispose();
   }
 
@@ -79,7 +82,7 @@ class _MapaScreenState extends State<MapaScreen> {
 
   void _recenterUser() {
     _mapController.move(_userLocation, 17.0);
-    context.read<AppState>().speak("Centrando mapa en tu ubicación actual.");
+    speakUi(context, "Centrando mapa en tu ubicación actual.");
     context.read<AppState>().vibrate(30);
   }
 
@@ -99,7 +102,10 @@ class _MapaScreenState extends State<MapaScreen> {
           // 2. BARRA DE BÚSQUEDA ESTILO GOOGLE MAPS (Superior Flotante)
           SafeArea(
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 8.0),
+              padding: const EdgeInsets.symmetric(
+                horizontal: 14.0,
+                vertical: 8.0,
+              ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -124,7 +130,7 @@ class _MapaScreenState extends State<MapaScreen> {
           if (!_isSearchFocused)
             Positioned(
               right: 14,
-              bottom: _isPanelCollapsed ? 120 : 340,
+              bottom: _isPanelCollapsed ? 140 : 440,
               child: _buildMapControls(),
             ),
 
@@ -147,6 +153,19 @@ class _MapaScreenState extends State<MapaScreen> {
         ? "https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"
         : "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
 
+    final dest = state.activeDestination;
+    final mapLabel = _destinationLocation == null
+        ? "Mapa interactivo. Tu ubicación está en el centro. Usa el buscador para elegir un destino."
+        : "Mapa interactivo con tu ubicación y la ruta hacia $dest. La guía paso a paso está en la tarjeta inferior.";
+
+    return Semantics(
+      container: true,
+      label: mapLabel,
+      child: ExcludeSemantics(child: _buildFlutterMap(tileUrl, state)),
+    );
+  }
+
+  Widget _buildFlutterMap(String tileUrl, AppState state) {
     return FlutterMap(
       mapController: _mapController,
       options: MapOptions(
@@ -154,7 +173,7 @@ class _MapaScreenState extends State<MapaScreen> {
         initialZoom: 16.5,
         minZoom: 12.0,
         maxZoom: 19.0,
-        onTap: (_, __) {
+        onTap: (_, _) {
           if (_isSearchFocused) {
             setState(() => _isSearchFocused = false);
             FocusScope.of(context).unfocus();
@@ -229,9 +248,7 @@ class _MapaScreenState extends State<MapaScreen> {
           decoration: const BoxDecoration(
             color: Colors.white,
             shape: BoxShape.circle,
-            boxShadow: [
-              BoxShadow(color: Colors.black54, blurRadius: 6),
-            ],
+            boxShadow: [BoxShadow(color: Colors.black54, blurRadius: 6)],
           ),
         ),
         // Núcleo cian de posición GPS
@@ -258,9 +275,7 @@ class _MapaScreenState extends State<MapaScreen> {
             color: const Color(0xFFFF2A2A),
             shape: BoxShape.circle,
             border: Border.all(color: Colors.white, width: 2),
-            boxShadow: const [
-              BoxShadow(color: Colors.black54, blurRadius: 8),
-            ],
+            boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 8)],
           ),
           child: const Icon(
             Icons.location_on_rounded,
@@ -298,7 +313,13 @@ class _MapaScreenState extends State<MapaScreen> {
             children: [
               const SizedBox(width: 14),
               // Icono de Búsqueda
-              const Icon(Icons.search_rounded, color: RiqsiTheme.accentCyan, size: 24),
+              const ExcludeSemantics(
+                child: Icon(
+                  Icons.search_rounded,
+                  color: RiqsiTheme.accentCyan,
+                  size: 24,
+                ),
+              ),
               const SizedBox(width: 10),
 
               // Campo de Texto de Destino
@@ -314,7 +335,7 @@ class _MapaScreenState extends State<MapaScreen> {
                   onChanged: _onSearchChanged,
                   decoration: const InputDecoration(
                     hintText: "Buscar destino o dirección...",
-                    hintStyle: TextStyle(color: Colors.white54, fontSize: 15),
+                    hintStyle: TextStyle(color: Colors.white70, fontSize: 16),
                     border: InputBorder.none,
                     isDense: true,
                     contentPadding: EdgeInsets.symmetric(vertical: 14),
@@ -322,11 +343,11 @@ class _MapaScreenState extends State<MapaScreen> {
                 ),
               ),
 
-              // Botón de Limpiar o Búsqueda por Voz
+              // Botón de limpiar (la búsqueda por voz aún no existe)
               if (_searchController.text.isNotEmpty)
-                IconButton(
-                  icon: const Icon(Icons.close_rounded, color: Colors.white70, size: 20),
-                  onPressed: () {
+                A11yTap(
+                  label: "Borrar búsqueda y destino",
+                  onTap: () {
                     _searchController.clear();
                     _onSearchChanged("");
                     setState(() {
@@ -334,22 +355,22 @@ class _MapaScreenState extends State<MapaScreen> {
                       _routePolyline.clear();
                     });
                   },
-                )
-              else
-                IconButton(
-                  icon: const Icon(Icons.mic_rounded, color: RiqsiTheme.accentCyan, size: 22),
-                  tooltip: "Búsqueda por voz",
-                  onPressed: () {
-                    state.speak("Dime qué lugar deseas buscar.");
-                    state.vibrate(30);
-                  },
+                  child: const Icon(
+                    Icons.close_rounded,
+                    color: Colors.white,
+                    size: 22,
+                  ),
                 ),
 
               // Botón de Enlace API
-              IconButton(
-                icon: const Icon(Icons.api_rounded, color: RiqsiTheme.accentCyan, size: 22),
-                tooltip: "Enlace API",
-                onPressed: () => _showApiModal(state),
+              A11yTap(
+                label: "Configurar enlace de la API de navegación",
+                onTap: () => _showApiModal(state),
+                child: const Icon(
+                  Icons.api_rounded,
+                  color: RiqsiTheme.accentCyan,
+                  size: 22,
+                ),
               ),
               const SizedBox(width: 4),
             ],
@@ -362,39 +383,55 @@ class _MapaScreenState extends State<MapaScreen> {
   /// Chips de Categorías Rápidas (Farmacias, Paraderos, Mercados, Mi Casa)
   Widget _buildCategoryFilterChips(AppState state) {
     final categories = [
-      {"label": "Farmacias", "icon": Icons.local_pharmacy_rounded, "q": "Farmacia"},
-      {"label": "Paraderos", "icon": Icons.directions_bus_rounded, "q": "Paradero"},
-      {"label": "Mercados", "icon": Icons.shopping_basket_rounded, "q": "Metro"},
+      {
+        "label": "Farmacias",
+        "icon": Icons.local_pharmacy_rounded,
+        "q": "Farmacia",
+      },
+      {
+        "label": "Paraderos",
+        "icon": Icons.directions_bus_rounded,
+        "q": "Paradero",
+      },
+      {
+        "label": "Mercados",
+        "icon": Icons.shopping_basket_rounded,
+        "q": "Metro",
+      },
       {"label": "Mi Casa", "icon": Icons.home_rounded, "q": "Casa"},
     ];
 
     return Container(
-      margin: const EdgeInsets.only(top: 8),
-      height: 38,
+      margin: const EdgeInsets.only(top: 4),
+      height: 52,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         itemCount: categories.length,
-        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        separatorBuilder: (_, _) => const SizedBox(width: 8),
         itemBuilder: (context, index) {
           final cat = categories[index];
           final label = cat["label"] as String;
           final icon = cat["icon"] as IconData;
           final query = cat["q"] as String;
 
-          return InkWell(
+          return A11yTap(
+            label: "Ir a $label",
+            hint: "Inicia la navegación al lugar más cercano de esta categoría",
             onTap: () {
               final results = _apiDataSource.searchPlaces(query);
               if (results.isNotEmpty) {
                 _selectDestination(results.first, state);
               }
             },
-            borderRadius: BorderRadius.circular(18),
+            borderRadius: BorderRadius.circular(24),
             child: Container(
+              constraints: const BoxConstraints(minHeight: 40),
+              alignment: Alignment.center,
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
               decoration: BoxDecoration(
                 color: Colors.black.withValues(alpha: 0.8),
                 borderRadius: BorderRadius.circular(18),
-                border: Border.all(color: Colors.white24, width: 1),
+                border: Border.all(color: Colors.white54, width: 1),
                 boxShadow: const [
                   BoxShadow(color: Colors.black38, blurRadius: 4),
                 ],
@@ -407,7 +444,7 @@ class _MapaScreenState extends State<MapaScreen> {
                     label,
                     style: const TextStyle(
                       color: Colors.white,
-                      fontSize: 13,
+                      fontSize: 14,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -430,10 +467,10 @@ class _MapaScreenState extends State<MapaScreen> {
           decoration: BoxDecoration(
             color: const Color(0xFF141923).withValues(alpha: 0.95),
             borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: RiqsiTheme.accentCyan.withValues(alpha: 0.4)),
-            boxShadow: const [
-              BoxShadow(color: Colors.black87, blurRadius: 16),
-            ],
+            border: Border.all(
+              color: RiqsiTheme.accentCyan.withValues(alpha: 0.4),
+            ),
+            boxShadow: const [BoxShadow(color: Colors.black87, blurRadius: 16)],
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -443,71 +480,99 @@ class _MapaScreenState extends State<MapaScreen> {
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const Text(
-                      "Lugares y Destinos Sugeridos",
-                      style: TextStyle(
-                        color: Colors.white70,
-                        fontSize: 13,
-                        fontWeight: FontWeight.bold,
+                    Expanded(
+                      child: Semantics(
+                        header: true,
+                        child: Text(
+                          "Lugares y Destinos Sugeridos",
+                          style: TextStyle(
+                            color: Colors.white70,
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
                       ),
                     ),
-                    IconButton(
-                      icon: const Icon(Icons.close, color: Colors.white60, size: 20),
-                      onPressed: () {
+                    A11yTap(
+                      label: "Cerrar lista de lugares",
+                      onTap: () {
                         setState(() => _isSearchFocused = false);
                         FocusScope.of(context).unfocus();
                       },
+                      child: const Icon(
+                        Icons.close,
+                        color: Colors.white70,
+                        size: 22,
+                      ),
                     ),
                   ],
                 ),
               ),
               const Divider(color: Colors.white12, height: 1),
               Expanded(
-                child: ListView.separated(
-                  itemCount: _searchResults.length,
-                  separatorBuilder: (_, __) => const Divider(color: Colors.white10, height: 1),
-                  itemBuilder: (context, index) {
-                    final item = _searchResults[index];
-                    final name = item["name"] as String;
-                    final address = item["address"] as String;
-                    final dist = "${item["distance"]} m";
+                child: Semantics(
+                  label: "Lista de ${_searchResults.length} lugares sugeridos",
+                  container: true,
+                  child: ListView.separated(
+                    itemCount: _searchResults.length,
+                    separatorBuilder: (_, _) =>
+                        const Divider(color: Colors.white10, height: 1),
+                    itemBuilder: (context, index) {
+                      final item = _searchResults[index];
+                      final name = item["name"] as String;
+                      final address = item["address"] as String;
+                      final dist = "${item["distance"]} m";
 
-                    return ListTile(
-                      leading: Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: RiqsiTheme.accentCyan.withValues(alpha: 0.15),
-                          shape: BoxShape.circle,
+                      return Semantics(
+                        button: true,
+                        container: true,
+                        excludeSemantics: true,
+                        label: "$name, $address, a $dist",
+                        hint: "Toca dos veces para iniciar la navegación",
+                        onTap: () => _selectDestination(item, state),
+                        child: ListTile(
+                          leading: Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: RiqsiTheme.accentCyan.withValues(
+                                alpha: 0.15,
+                              ),
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(
+                              Icons.location_on_outlined,
+                              color: RiqsiTheme.accentCyan,
+                              size: 20,
+                            ),
+                          ),
+                          title: Text(
+                            name,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 15,
+                            ),
+                          ),
+                          subtitle: Text(
+                            address,
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 14,
+                            ),
+                          ),
+                          trailing: Text(
+                            dist,
+                            style: const TextStyle(
+                              color: RiqsiTheme.accentCyan,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 14,
+                            ),
+                          ),
+                          onTap: () => _selectDestination(item, state),
                         ),
-                        child: const Icon(
-                          Icons.location_on_outlined,
-                          color: RiqsiTheme.accentCyan,
-                          size: 20,
-                        ),
-                      ),
-                      title: Text(
-                        name,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 15,
-                        ),
-                      ),
-                      subtitle: Text(
-                        address,
-                        style: const TextStyle(color: Colors.white60, fontSize: 13),
-                      ),
-                      trailing: Text(
-                        dist,
-                        style: const TextStyle(
-                          color: RiqsiTheme.accentCyan,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 12,
-                        ),
-                      ),
-                      onTap: () => _selectDestination(item, state),
-                    );
-                  },
+                      );
+                    },
+                  ),
                 ),
               ),
             ],
@@ -533,7 +598,9 @@ class _MapaScreenState extends State<MapaScreen> {
 
         // Botón Capa Oscura / Estándar
         _buildCircleButton(
-          icon: _useDarkMap ? Icons.dark_mode_rounded : Icons.light_mode_rounded,
+          icon: _useDarkMap
+              ? Icons.dark_mode_rounded
+              : Icons.light_mode_rounded,
           tooltip: "Alternar modo mapa",
           color: Colors.white,
           onTap: () {
@@ -574,24 +641,20 @@ class _MapaScreenState extends State<MapaScreen> {
     required Color color,
     required VoidCallback onTap,
   }) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(24),
-        child: Container(
-          width: 46,
-          height: 46,
-          decoration: BoxDecoration(
-            color: const Color(0xFF161B26).withValues(alpha: 0.9),
-            shape: BoxShape.circle,
-            border: Border.all(color: Colors.white24, width: 1.2),
-            boxShadow: const [
-              BoxShadow(color: Colors.black45, blurRadius: 8),
-            ],
-          ),
-          child: Icon(icon, color: color, size: 22),
+    // Dibujo de 46dp; el área táctil mínima de A11yTap garantiza 48dp.
+    return A11yTap(
+      label: tooltip,
+      onTap: onTap,
+      child: Container(
+        width: 48,
+        height: 48,
+        decoration: BoxDecoration(
+          color: const Color(0xFF161B26).withValues(alpha: 0.9),
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.white54, width: 1.2),
+          boxShadow: const [BoxShadow(color: Colors.black45, blurRadius: 8)],
         ),
+        child: Icon(icon, color: color, size: 22),
       ),
     );
   }
@@ -641,48 +704,66 @@ class _MapaScreenState extends State<MapaScreen> {
                   ),
                   const SizedBox(width: 14),
 
-                  // Texto de Maniobra y Metros
+                  // Texto de Maniobra y Metros (región viva: se lee al cambiar el paso)
                   Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          step.directionTitle,
-                          style: TextStyle(
-                            color: visual.color,
-                            fontSize: 20,
-                            fontWeight: FontWeight.w900,
-                            letterSpacing: 0.8,
-                          ),
+                    child: Semantics(
+                      liveRegion: true,
+                      container: true,
+                      label:
+                          "${step.directionTitle}. ${step.distanceMeters} metros. ${step.streetName}. ${step.instruction}",
+                      child: ExcludeSemantics(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              step.directionTitle,
+                              style: TextStyle(
+                                color: visual.color,
+                                fontSize: 20,
+                                fontWeight: FontWeight.w900,
+                                letterSpacing: 0.8,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              "${step.distanceMeters} metros • ${step.streetName}",
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 14,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
                         ),
-                        const SizedBox(height: 2),
-                        Text(
-                          "${step.distanceMeters} metros • ${step.streetName}",
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 14,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ],
+                      ),
                     ),
                   ),
 
                   // Botón de Repetir Voz
-                  IconButton(
-                    onPressed: state.repeatNavInstruction,
-                    icon: const Icon(Icons.volume_up_rounded, color: RiqsiTheme.accentCyan, size: 28),
-                    tooltip: "Repetir indicación de voz",
+                  A11yTap(
+                    label: "Repetir indicación de voz",
+                    onTap: state.repeatNavInstruction,
+                    child: const Icon(
+                      Icons.volume_up_rounded,
+                      color: RiqsiTheme.accentCyan,
+                      size: 28,
+                    ),
                   ),
 
                   // Botón de Colapsar/Expandir
-                  IconButton(
-                    onPressed: () {
+                  A11yTap(
+                    label: _isPanelCollapsed
+                        ? "Expandir panel de navegación"
+                        : "Contraer panel de navegación",
+                    onTap: () {
                       setState(() => _isPanelCollapsed = !_isPanelCollapsed);
                     },
-                    icon: Icon(
-                      _isPanelCollapsed ? Icons.expand_less_rounded : Icons.expand_more_rounded,
-                      color: Colors.white60,
+                    child: Icon(
+                      _isPanelCollapsed
+                          ? Icons.expand_less_rounded
+                          : Icons.expand_more_rounded,
+                      color: Colors.white70,
+                      size: 28,
                     ),
                   ),
                 ],
@@ -691,13 +772,15 @@ class _MapaScreenState extends State<MapaScreen> {
               // Contenido Expandido: Instrucción y 4 Botones Táctiles para el API
               if (!_isPanelCollapsed) ...[
                 const SizedBox(height: 8),
-                Text(
-                  step.instruction,
-                  style: const TextStyle(color: Colors.white70, fontSize: 13),
+                ExcludeSemantics(
+                  child: Text(
+                    step.instruction,
+                    style: const TextStyle(color: Colors.white70, fontSize: 14),
+                  ),
                 ),
                 const SizedBox(height: 12),
 
-                // LOS 4 BOTONES DE MANIOBRA DEL API: DE FRENTE, DERECHA, IZQUIERDA, ATRÁS
+                // 4 botones de maniobra del API, en cuadrícula 2x2 (texto legible)
                 Row(
                   children: [
                     Expanded(
@@ -708,12 +791,13 @@ class _MapaScreenState extends State<MapaScreen> {
                         Icons.arrow_upward_rounded,
                         () => state.setNavDirection(
                           NavDirection.straight,
-                          customInstruction: "Continúa de frente. Acera despejada.",
+                          customInstruction:
+                              "Continúa de frente. Acera despejada.",
                           distanceMeters: 25,
                         ),
                       ),
                     ),
-                    const SizedBox(width: 6),
+                    const SizedBox(width: 8),
                     Expanded(
                       child: _buildMiniDirectionButton(
                         "DERECHA",
@@ -722,12 +806,17 @@ class _MapaScreenState extends State<MapaScreen> {
                         Icons.arrow_forward_rounded,
                         () => state.setNavDirection(
                           NavDirection.right,
-                          customInstruction: "Gira a la derecha en la próxima esquina.",
+                          customInstruction:
+                              "Gira a la derecha en la próxima esquina.",
                           distanceMeters: 15,
                         ),
                       ),
                     ),
-                    const SizedBox(width: 6),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
                     Expanded(
                       child: _buildMiniDirectionButton(
                         "IZQUIERDA",
@@ -736,12 +825,13 @@ class _MapaScreenState extends State<MapaScreen> {
                         Icons.arrow_back_rounded,
                         () => state.setNavDirection(
                           NavDirection.left,
-                          customInstruction: "Gira a la izquierda con precaución.",
+                          customInstruction:
+                              "Gira a la izquierda con precaución.",
                           distanceMeters: 15,
                         ),
                       ),
                     ),
-                    const SizedBox(width: 6),
+                    const SizedBox(width: 8),
                     Expanded(
                       child: _buildMiniDirectionButton(
                         "ATRÁS",
@@ -750,7 +840,8 @@ class _MapaScreenState extends State<MapaScreen> {
                         Icons.u_turn_left_rounded,
                         () => state.setNavDirection(
                           NavDirection.back,
-                          customInstruction: "Da media vuelta. Ve hacia atrás para retomar tu ruta.",
+                          customInstruction:
+                              "Da media vuelta. Ve hacia atrás para retomar tu ruta.",
                           distanceMeters: 10,
                         ),
                       ),
@@ -772,26 +863,34 @@ class _MapaScreenState extends State<MapaScreen> {
     IconData icon,
     VoidCallback onTap,
   ) {
-    return InkWell(
+    return A11yTap(
+      label: "Indicar dirección: ${label.toLowerCase()}",
       onTap: onTap,
-      borderRadius: BorderRadius.circular(10),
+      borderRadius: BorderRadius.circular(12),
       child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 8),
+        width: double.infinity,
+        constraints: const BoxConstraints(minHeight: 48),
+        padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 6),
         decoration: BoxDecoration(
           color: color.withValues(alpha: 0.15),
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(12),
           border: Border.all(color: color, width: 1.5),
         ),
-        child: Column(
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, color: color, size: 18),
-            const SizedBox(height: 2),
-            Text(
-              label,
-              style: TextStyle(
-                color: color,
-                fontSize: 10,
-                fontWeight: FontWeight.bold,
+            Icon(icon, color: color, size: 20),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: color,
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ),
           ],
@@ -801,62 +900,12 @@ class _MapaScreenState extends State<MapaScreen> {
   }
 
   void _showApiModal(AppState state) {
-    final controller = TextEditingController(text: state.navigationApiUrl);
-
-    showDialog(
+    showDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF161B26),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-        title: const Row(
-          children: [
-            Icon(Icons.api_rounded, color: RiqsiTheme.accentCyan),
-            SizedBox(width: 8),
-            Text("API de Navegación", style: TextStyle(color: Colors.white, fontSize: 18)),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              "URL del backend para cálculo de rutas y direcciones en tiempo real:",
-              style: TextStyle(color: Colors.white70, fontSize: 13),
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: controller,
-              style: const TextStyle(color: Colors.white),
-              decoration: InputDecoration(
-                filled: true,
-                fillColor: Colors.black38,
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-                hintText: "http://10.247.64.45:8765/api/route",
-                hintStyle: const TextStyle(color: Colors.white30),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              state.testNavApiConnection();
-            },
-            child: const Text("Probar Conexión", style: TextStyle(color: RiqsiTheme.accentCyan)),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: RiqsiTheme.accentCyan,
-              foregroundColor: Colors.black,
-            ),
-            onPressed: () {
-              state.updateNavApiUrl(controller.text.trim());
-              Navigator.pop(ctx);
-            },
-            child: const Text("Guardar"),
-          ),
-        ],
+      builder: (ctx) => _ApiUrlDialog(
+        initialUrl: state.navigationApiUrl,
+        onTest: state.testNavApiConnection,
+        onSave: (url) => state.updateNavApiUrl(url),
       ),
     );
   }
@@ -864,15 +913,30 @@ class _MapaScreenState extends State<MapaScreen> {
   _DirectionVisuals _getDirectionVisuals(NavDirection dir) {
     switch (dir) {
       case NavDirection.straight:
-        return _DirectionVisuals(color: RiqsiTheme.accentCyan, icon: Icons.arrow_upward_rounded);
+        return _DirectionVisuals(
+          color: RiqsiTheme.accentCyan,
+          icon: Icons.arrow_upward_rounded,
+        );
       case NavDirection.right:
-        return _DirectionVisuals(color: const Color(0xFF00E676), icon: Icons.arrow_forward_rounded);
+        return _DirectionVisuals(
+          color: const Color(0xFF00E676),
+          icon: Icons.arrow_forward_rounded,
+        );
       case NavDirection.left:
-        return _DirectionVisuals(color: const Color(0xFFB388FF), icon: Icons.arrow_back_rounded);
+        return _DirectionVisuals(
+          color: const Color(0xFFB388FF),
+          icon: Icons.arrow_back_rounded,
+        );
       case NavDirection.back:
-        return _DirectionVisuals(color: const Color(0xFFFF5252), icon: Icons.u_turn_left_rounded);
+        return _DirectionVisuals(
+          color: const Color(0xFFFF5252),
+          icon: Icons.u_turn_left_rounded,
+        );
       case NavDirection.arrived:
-        return _DirectionVisuals(color: const Color(0xFFFFD600), icon: Icons.check_circle_rounded);
+        return _DirectionVisuals(
+          color: const Color(0xFFFFD600),
+          icon: Icons.check_circle_rounded,
+        );
     }
   }
 }
@@ -882,4 +946,104 @@ class _DirectionVisuals {
   final IconData icon;
 
   _DirectionVisuals({required this.color, required this.icon});
+}
+
+/// Diálogo de URL de la API; el controlador vive y se libera en su State.
+class _ApiUrlDialog extends StatefulWidget {
+  final String initialUrl;
+  final VoidCallback onTest;
+  final ValueChanged<String> onSave;
+
+  const _ApiUrlDialog({
+    required this.initialUrl,
+    required this.onTest,
+    required this.onSave,
+  });
+
+  @override
+  State<_ApiUrlDialog> createState() => _ApiUrlDialogState();
+}
+
+class _ApiUrlDialogState extends State<_ApiUrlDialog> {
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.initialUrl,
+  );
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: const Color(0xFF161B26),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+      title: const Row(
+        children: [
+          ExcludeSemantics(
+            child: Icon(Icons.api_rounded, color: RiqsiTheme.accentCyan),
+          ),
+          SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              "API de Navegación",
+              style: TextStyle(color: Colors.white, fontSize: 18),
+            ),
+          ),
+        ],
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            "URL del backend para cálculo de rutas y direcciones en tiempo real:",
+            style: TextStyle(color: Colors.white70, fontSize: 14),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _controller,
+            style: const TextStyle(color: Colors.white),
+            decoration: InputDecoration(
+              labelText: "URL de la API",
+              labelStyle: const TextStyle(color: Colors.white70),
+              filled: true,
+              fillColor: Colors.black38,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              hintText: "http://10.247.64.45:8765/api/route",
+              hintStyle: const TextStyle(color: Colors.white70),
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () {
+            Navigator.pop(context);
+            widget.onTest();
+          },
+          child: const Text(
+            "Probar Conexión",
+            style: TextStyle(color: RiqsiTheme.accentCyan),
+          ),
+        ),
+        ElevatedButton(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: RiqsiTheme.accentCyan,
+            foregroundColor: Colors.black,
+            minimumSize: const Size(48, 48),
+          ),
+          onPressed: () {
+            widget.onSave(_controller.text.trim());
+            Navigator.pop(context);
+          },
+          child: const Text("Guardar"),
+        ),
+      ],
+    );
+  }
 }

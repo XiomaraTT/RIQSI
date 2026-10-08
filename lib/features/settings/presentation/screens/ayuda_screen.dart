@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../../../../core/accessibility/a11y_tap.dart';
+import '../../../../core/accessibility/ui_speech.dart';
 import '../../../../core/theme/riqsi_theme.dart';
 import '../../../../state/app_state.dart';
 
@@ -10,14 +12,29 @@ class AyudaScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final state = Provider.of<AppState>(context, listen: false);
 
-    // List of voice commands to display
-    final List<Map<String, String>> voiceCommands = [
-      {"cmd": "“Iniciar asistencia”", "desc": "Activa el escaneo en tiempo real"},
-      {"cmd": "“Detener asistencia”", "desc": "Pausa el escaneo de la cámara"},
-      {"cmd": "“¿Qué hay delante?”", "desc": "Describe los objetos frente a ti"},
-      {"cmd": "“Repetir”", "desc": "Vuelve a pronunciar la última descripción"},
-      {"cmd": "“¿Qué detectaste?”", "desc": "Lista las últimas tres detecciones"},
-      {"cmd": "“Configuración”", "desc": "Abre el menú de ajustes de voz"},
+    // Controles reales de la app (los comandos de voz aún no existen)
+    final List<Map<String, String>> controls = [
+      {"cmd": "Botón central", "desc": "Inicia o detiene la asistencia visual"},
+      {
+        "cmd": "Repetir última descripción",
+        "desc": "Vuelve a pronunciar lo último que Riqsi detectó",
+      },
+      {
+        "cmd": "Silenciar o activar voz",
+        "desc": "Botón de volumen en la parte superior del inicio",
+      },
+      {
+        "cmd": "Vibración",
+        "desc": "Activa o desactiva las vibraciones de aviso",
+      },
+      {
+        "cmd": "Mapa",
+        "desc": "Busca un destino y recibe indicaciones paso a paso",
+      },
+      {
+        "cmd": "Perfil",
+        "desc": "Ajusta velocidad de voz, volumen y sensibilidad",
+      },
     ];
 
     // List of step-by-step instructions
@@ -38,14 +55,15 @@ class AyudaScreen extends StatelessWidget {
         centerTitle: true,
         backgroundColor: Colors.transparent,
         elevation: 0,
-        leading: Semantics(
+        leading: A11yTap(
           label: "Volver a la pantalla de configuración",
-          child: IconButton(
-            icon: const Icon(Icons.arrow_back_ios_rounded, color: RiqsiTheme.accentCyan),
-            onPressed: () {
-              Navigator.pop(context);
-              state.speak("Regresando a configuración.");
-            },
+          onTap: () {
+            Navigator.pop(context);
+            speakUi(context, "Regresando a configuración.");
+          },
+          child: const Icon(
+            Icons.arrow_back_ios_rounded,
+            color: RiqsiTheme.accentCyan,
           ),
         ),
       ),
@@ -55,12 +73,15 @@ class AyudaScreen extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12.0),
           children: [
             // Title 1
-            const Text(
-              "Instrucciones de Uso",
-              style: TextStyle(
-                color: RiqsiTheme.accentCyan,
-                fontSize: 22,
-                fontWeight: FontWeight.w900,
+            Semantics(
+              header: true,
+              child: Text(
+                "Instrucciones de Uso",
+                style: TextStyle(
+                  color: RiqsiTheme.accentCyan,
+                  fontSize: 22,
+                  fontWeight: FontWeight.w900,
+                ),
               ),
             ),
             const SizedBox(height: 12),
@@ -69,13 +90,16 @@ class AyudaScreen extends StatelessWidget {
             ...List.generate(steps.length, (index) {
               return Semantics(
                 label: "Paso ${index + 1}: ${steps[index]}",
+                excludeSemantics: true,
                 child: Container(
                   margin: const EdgeInsets.symmetric(vertical: 6.0),
                   padding: const EdgeInsets.all(16.0),
                   decoration: BoxDecoration(
                     color: RiqsiTheme.darkSurface,
                     borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: RiqsiTheme.textSecondary.withOpacity(0.08)),
+                    border: Border.all(
+                      color: RiqsiTheme.textSecondary.withValues(alpha: 0.08),
+                    ),
                   ),
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -118,78 +142,87 @@ class AyudaScreen extends StatelessWidget {
             const SizedBox(height: 28),
 
             // Title 2
-            const Text(
-              "Comandos de Voz",
-              style: TextStyle(
-                color: RiqsiTheme.accentCyan,
-                fontSize: 22,
-                fontWeight: FontWeight.w900,
+            Semantics(
+              header: true,
+              child: Text(
+                "Controles de la aplicación",
+                style: TextStyle(
+                  color: RiqsiTheme.accentCyan,
+                  fontSize: 22,
+                  fontWeight: FontWeight.w900,
+                ),
               ),
             ),
             const SizedBox(height: 4),
             const Text(
-              "Riqsi admite comandos de voz. Toca un comando para escuchar su función.",
+              "Los comandos de voz estarán disponibles próximamente. Por ahora, usa estos controles. Toca uno para escuchar su función.",
               style: TextStyle(color: RiqsiTheme.textSecondary, fontSize: 15),
             ),
             const SizedBox(height: 12),
 
             // Voice Command Cards
-            ...voiceCommands.map((command) {
+            ...controls.map((command) {
               return Padding(
                 padding: const EdgeInsets.symmetric(vertical: 6.0),
-                child: InkWell(
-                  onTap: () {
-                    state.speak("Comando: ${command['cmd']}. Sirve para: ${command['desc']}");
-                    state.vibrate(60);
-                  },
-                  borderRadius: BorderRadius.circular(16),
-                  child: Container(
-                    padding: const EdgeInsets.all(16.0),
-                    decoration: BoxDecoration(
-                      color: RiqsiTheme.darkSurface,
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(
-                        color: RiqsiTheme.accentCyan.withOpacity(0.15),
-                        width: 1.5,
+                child: Semantics(
+                  button: true,
+                  excludeSemantics: true,
+                  label: "${command['cmd']}. ${command['desc']}",
+                  onTap: () => state.vibrate(60),
+                  child: InkWell(
+                    onTap: () {
+                      speakUi(context, "${command['cmd']}. ${command['desc']}");
+                      state.vibrate(60);
+                    },
+                    borderRadius: BorderRadius.circular(16),
+                    child: Container(
+                      padding: const EdgeInsets.all(16.0),
+                      decoration: BoxDecoration(
+                        color: RiqsiTheme.darkSurface,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: RiqsiTheme.accentCyan.withValues(alpha: 0.15),
+                          width: 1.5,
+                        ),
                       ),
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                command['cmd']!,
-                                style: const TextStyle(
-                                  color: RiqsiTheme.accentCyan,
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.bold,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  command['cmd']!,
+                                  style: const TextStyle(
+                                    color: RiqsiTheme.accentCyan,
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.bold,
+                                  ),
                                 ),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                command['desc']!,
-                                style: const TextStyle(
-                                  color: Colors.white70,
-                                  fontSize: 15,
+                                const SizedBox(height: 4),
+                                Text(
+                                  command['desc']!,
+                                  style: const TextStyle(
+                                    color: Colors.white70,
+                                    fontSize: 15,
+                                  ),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
-                        ),
-                        const Icon(
-                          Icons.volume_up_rounded,
-                          color: RiqsiTheme.accentCyan,
-                        ),
-                      ],
+                          const Icon(
+                            Icons.volume_up_rounded,
+                            color: RiqsiTheme.accentCyan,
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
               );
-            }).toList(),
-            
+            }),
+
             const SizedBox(height: 24),
           ],
         ),

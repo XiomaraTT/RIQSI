@@ -26,6 +26,8 @@ class AccessibleButton extends StatelessWidget {
       label: label,
       hint: semanticHint,
       enabled: true,
+      excludeSemantics: true,
+      onTap: onPressed,
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: 8),
         width: double.infinity,
@@ -81,8 +83,11 @@ class AccessibleIconButton extends StatelessWidget {
     return Semantics(
       button: true,
       label: label,
+      excludeSemantics: true,
+      onTap: onPressed,
       child: Tooltip(
         message: label,
+        excludeFromSemantics: true,
         child: InkWell(
           onTap: () {
             onPressed();
@@ -92,9 +97,9 @@ class AccessibleIconButton extends StatelessWidget {
             width: 72,
             height: 72, // Large accessibility tap target
             decoration: BoxDecoration(
-              color: isActive ? effectiveColor.withOpacity(0.2) : RiqsiTheme.darkSurface,
+              color: isActive ? effectiveColor.withValues(alpha: 0.2) : RiqsiTheme.darkSurface,
               border: Border.all(
-                color: isActive ? effectiveColor : RiqsiTheme.textSecondary.withOpacity(0.3),
+                color: isActive ? effectiveColor : RiqsiTheme.textSecondary.withValues(alpha: 0.3),
                 width: 2.5,
               ),
               borderRadius: BorderRadius.circular(20),

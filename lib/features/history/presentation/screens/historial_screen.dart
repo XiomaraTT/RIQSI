@@ -30,8 +30,8 @@ class HistorialScreen extends StatelessWidget {
               child: Text(
                 "Toca cualquier tarjeta del historial para volver a escuchar la descripción por voz.",
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: RiqsiTheme.textSecondary,
-                    ),
+                  color: RiqsiTheme.textSecondary,
+                ),
                 textAlign: TextAlign.center,
               ),
             ),
@@ -42,7 +42,10 @@ class HistorialScreen extends StatelessWidget {
                   ? _buildEmptyState(context)
                   : ListView.builder(
                       physics: const BouncingScrollPhysics(),
-                      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16.0,
+                        vertical: 8.0,
+                      ),
                       itemCount: historyList.length,
                       itemBuilder: (context, index) {
                         final event = historyList[index];
@@ -70,13 +73,13 @@ class HistorialScreen extends StatelessWidget {
           Text(
             "Historial Vacío",
             style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                  color: RiqsiTheme.textSecondary,
-                ),
+              color: RiqsiTheme.textSecondary,
+            ),
           ),
           const SizedBox(height: 8),
           const Text(
             "Las detecciones aparecerán aquí una vez inicies la asistencia.",
-            style: TextStyle(color: Colors.white60),
+            style: TextStyle(color: Colors.white70),
             textAlign: TextAlign.center,
           ),
         ],
@@ -84,7 +87,11 @@ class HistorialScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildHistoryCard(BuildContext context, AppState state, DetectionEvent event) {
+  Widget _buildHistoryCard(
+    BuildContext context,
+    AppState state,
+    DetectionEvent event,
+  ) {
     // Determine risk tags
     Color riskColor;
     IconData riskIcon;
@@ -100,12 +107,19 @@ class HistorialScreen extends StatelessWidget {
     }
 
     // Format hour
-    final String timeStr = "${event.timestamp.hour.toString().padLeft(2, '0')}:${event.timestamp.minute.toString().padLeft(2, '0')}";
+    final String timeStr =
+        "${event.timestamp.hour.toString().padLeft(2, '0')}:${event.timestamp.minute.toString().padLeft(2, '0')}";
 
     return Semantics(
       button: true,
-      label: "Detección a las $timeStr. ${event.label} a la ${event.relativePosition}. Riesgo ${event.riskLevel}.",
+      label:
+          "Detección a las $timeStr. ${event.label} ${event.relativePosition == 'Adelante' ? 'adelante' : 'a la ${event.relativePosition}'}. Riesgo ${event.riskLevel}.",
       hint: "Toca dos veces para escuchar la descripción de voz nuevamente",
+      excludeSemantics: true,
+      onTap: () {
+        state.speak(event.description);
+        state.vibrate(80);
+      },
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 8.0),
         child: InkWell(
@@ -120,15 +134,17 @@ class HistorialScreen extends StatelessWidget {
               color: RiqsiTheme.darkSurface,
               borderRadius: BorderRadius.circular(16),
               border: Border.all(
-                color: event.riskLevel == 'Alto' ? RiqsiTheme.alertHigh.withOpacity(0.5) : RiqsiTheme.textSecondary.withOpacity(0.1),
+                color: event.riskLevel == 'Alto'
+                    ? RiqsiTheme.alertHigh.withValues(alpha: 0.5)
+                    : RiqsiTheme.textSecondary.withValues(alpha: 0.1),
                 width: event.riskLevel == 'Alto' ? 2.5 : 1.0,
               ),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.2),
+                  color: Colors.black.withValues(alpha: 0.2),
                   blurRadius: 4,
                   offset: const Offset(0, 2),
-                )
+                ),
               ],
             ),
             child: Row(
@@ -136,11 +152,16 @@ class HistorialScreen extends StatelessWidget {
               children: [
                 // Time tag (Cyan style)
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.black,
                     borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: RiqsiTheme.textSecondary.withOpacity(0.2)),
+                    border: Border.all(
+                      color: RiqsiTheme.textSecondary.withValues(alpha: 0.2),
+                    ),
                   ),
                   child: Text(
                     timeStr,
@@ -161,14 +182,18 @@ class HistorialScreen extends StatelessWidget {
                       Text(
                         event.label,
                         style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                              fontSize: 22,
-                              fontWeight: FontWeight.bold,
-                            ),
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
                       const SizedBox(height: 4),
                       Row(
                         children: [
-                          const Icon(Icons.navigation_outlined, size: 16, color: RiqsiTheme.textSecondary),
+                          const Icon(
+                            Icons.navigation_outlined,
+                            size: 16,
+                            color: RiqsiTheme.textSecondary,
+                          ),
                           const SizedBox(width: 4),
                           Expanded(
                             child: Text(
@@ -188,9 +213,12 @@ class HistorialScreen extends StatelessWidget {
 
                 // Risk Badge
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
                   decoration: BoxDecoration(
-                    color: riskColor.withOpacity(0.15),
+                    color: riskColor.withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(color: riskColor, width: 2),
                   ),
