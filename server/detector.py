@@ -114,6 +114,14 @@ class YoloDetector:
                 self.models.append((YOLO(str(custom), task="detect"), "custom"))
                 break
 
+        # Calentamiento: la primera inferencia en CPU tarda varios segundos y la app
+        # la tomaría como servidor caído (su vigilante espera 5 s sin respuesta).
+        if self.models:
+            dummy = np.zeros((480, 640, 3), dtype=np.uint8)
+            for model, _ in self.models:
+                model.predict(dummy, imgsz=320, verbose=False)
+            print("[INFO] Modelos listos (calentamiento hecho).", flush=True)
+
         if not self.models:
             print(f"[ADVERTENCIA] No se encontró ningún modelo (yolov8n.pt, best.pt, best.onnx) en {ROOT}. "
                   "Solo funcionarán las heurísticas de pared y hueco.", flush=True)
