@@ -1,37 +1,33 @@
 # Riqsi - Asistente de Visión Inteligente 👁️📱
 
-Riqsi es un asistente inteligente de visión del entorno para personas con discapacidad visual. Esta versión utiliza una arquitectura híbrida de visión artificial: la cámara de la PC actúa como sensor remoto (usando OpenCV y YOLOv8 opcional) y envía las detecciones en tiempo real al teléfono móvil a través de WebSockets, donde el usuario escucha la descripción por voz (TTS real) y siente la vibración.
+Riqsi es un asistente inteligente de visión del entorno para personas con discapacidad visual. Esta versión utiliza una arquitectura híbrida de visión artificial: la cámara del celular envía imágenes a la PC, que las analiza con OpenCV y YOLOv8 y devuelve las detecciones en tiempo real al teléfono a través de WebSockets, donde el usuario escucha la descripción por voz (TTS real) y siente la vibración.
 
 ---
 
 ## 🛠️ Requisitos de Instalación (PC)
 
-Para correr el servidor de visión que activa la cámara web y realiza las detecciones:
+El **celular envía su cámara** al servidor que corre en tu PC; la PC ejecuta YOLOv8 y devuelve las detecciones al teléfono.
 
-1. Asegúrate de tener instalado **Python 3.8+**.
-2. Instala las dependencias requeridas en la consola de comandos de tu PC:
+1. Asegúrate de tener instalado **Python 3.10+**.
+2. Instala las dependencias del servidor desde la raíz del proyecto:
    ```bash
-   pip install opencv-python websockets
+   pip install -r server/requirements.txt
    ```
-   *(Opcional: Si deseas usar detección de objetos avanzada YOLOv8 en lugar del detector facial rápido por defecto, instala: `pip install ultralytics`)*.
+   *(Los modelos `yolov8n.pt` y `best.pt` ya vienen en la raíz del repositorio.)*
 
 ---
 
 ## 🚀 Guía de Ejecución Paso a Paso
 
 ### 1. Iniciar el Servidor de Visión (PC)
-Ejecuta el script de Python ubicado en la carpeta del proyecto:
 ```bash
 python server/detector.py
 ```
-Esto encenderá tu cámara web local y abrirá una ventana de video llamada **"Riqsi Vision Server"**.
+El servidor escucha en el puerto **8765** y atiende a **un solo celular a la vez** (si se conecta otro, se cierra el anterior).
 
-* **Teclas rápidas en la ventana del servidor:**
-  * `q`: Detener y cerrar el servidor.
-  * `p`: Simular obstáculo `Puerta adelante`.
-  * `e`: Simular obstáculo `Escalón adelante`.
-  * `b`: Simular obstáculo `Bicicleta a la derecha`.
-  * `a`: Simular obstáculo `Automóvil adelante` (Alerta Crítica).
+* **Token opcional:** define la variable de entorno `RIQSI_TOKEN` antes de iniciar y el servidor exigirá `?token=...` en la URL de conexión. Si no la defines, acepta conexiones como siempre (la app aún no envía token).
+* **Monitor opcional:** `python server/detector.py --monitor` (o `RIQSI_MONITOR=1`) abre una ventana "Riqsi Monitor" para depurar lo que ve el servidor. Por defecto está apagado.
+* **Pruebas:** `python -m pytest server/tests -q`
 
 ---
 
@@ -43,4 +39,4 @@ Esto encenderá tu cámara web local y abrirá una ventana de video llamada **"R
    * Selecciona la opción **Servidor IP** e ingresa la dirección IP de tu PC.
    * Guarda los cambios.
 4. Regresa a la pestaña **Inicio** y presiona el gran botón de play central.
-5. ¡Listo! La cámara de tu PC transmitirá la información visual. Cuando detecte una persona frente a la pantalla o simules un objeto presionando las teclas rápidas, el teléfono móvil **reproducirá el audio en voz alta en español** y **vibrará** al instante.
+5. ¡Listo! La cámara de tu celular se enviará a la PC, que analizará cada imagen. El teléfono **reproducirá el audio en voz alta en español** y **vibrará** cuando haya un obstáculo cerca.
