@@ -5,8 +5,13 @@ class SpeakText {
 
   SpeakText(this.ttsRepository);
 
-  Future<void> execute(String text, double rate, double volume) async {
-    await ttsRepository.speak(text, rate, volume);
+  Future<void> execute(
+    String text,
+    double rate,
+    double volume, {
+    SpeechPriority priority = SpeechPriority.normal,
+  }) async {
+    await ttsRepository.speak(text, rate, volume, priority: priority);
   }
 
   Future<void> stop() async {

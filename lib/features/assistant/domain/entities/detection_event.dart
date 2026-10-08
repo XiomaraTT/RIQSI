@@ -10,6 +10,7 @@ class DetectionEvent {
   final String distancia;        // 'muy_cerca', 'cerca', 'lejos', 'despejado'
   final bool announceVoice;      // true para hablar, false para solo modular vibración
   final List<DetectedObject> objects;
+  final bool isClear;            // true si el servidor envió type == 'clear'
 
   DetectionEvent({
     required this.id,
@@ -19,7 +20,38 @@ class DetectionEvent {
     required this.timestamp,
     required this.description,
     this.distancia = 'lejos',
-    this.announceVoice = true,
+    this.announceVoice = false,
     this.objects = const [],
+    this.isClear = false,
   });
+
+  bool get isHighRisk => riskLevel == 'Alto';
+
+  /// Serialización para el historial persistido (sin cajas de detección).
+  Map<String, dynamic> toMap() => {
+        'id': id,
+        'label': label,
+        'position': relativePosition,
+        'risk': riskLevel,
+        'timestamp': timestamp.millisecondsSinceEpoch,
+        'description': description,
+        'distancia': distancia,
+      };
+
+  static DetectionEvent? fromMap(Map<String, dynamic> map) {
+    try {
+      return DetectionEvent(
+        id: map['id']?.toString() ?? '',
+        label: map['label'] as String? ?? '',
+        relativePosition: map['position'] as String? ?? '',
+        riskLevel: map['risk'] as String? ?? 'Bajo',
+        timestamp: DateTime.fromMillisecondsSinceEpoch(
+            (map['timestamp'] as num?)?.toInt() ?? 0),
+        description: map['description'] as String? ?? '',
+        distancia: map['distancia'] as String? ?? 'lejos',
+      );
+    } catch (_) {
+      return null;
+    }
+  }
 }

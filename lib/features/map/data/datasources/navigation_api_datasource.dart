@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:latlong2/latlong.dart';
 import '../../domain/entities/navigation_step.dart';
 
@@ -15,11 +16,10 @@ class NavigationApiDataSource {
     required String destination,
   }) async {
     // 1. Intentar consultar el API configurado (servidor local o servicio web)
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 4);
     try {
       final uri = Uri.parse(apiUrl);
-      final client = HttpClient();
-      client.connectionTimeout = const Duration(seconds: 4);
-
       final request = await client.postUrl(uri);
       request.headers.set('content-type', 'application/json');
       request.write(jsonEncode({
@@ -32,37 +32,55 @@ class NavigationApiDataSource {
         'accessible_routing': true,
       }));
 
-      final response = await request.close();
+      final response = await request.close().timeout(const Duration(seconds: 8));
       if (response.statusCode == 200) {
-        final responseBody = await response.transform(utf8.decoder).join();
+        final responseBody = await response
+            .transform(utf8.decoder)
+            .join()
+            .timeout(const Duration(seconds: 8));
         final data = jsonDecode(responseBody);
-        final stepsList = data['steps'] as List?;
+        final stepsList = data is Map ? data['steps'] as List? : null;
         if (stepsList != null && stepsList.isNotEmpty) {
           return stepsList.map((s) => NavigationStep.fromJson(s as Map<String, dynamic>)).toList();
         }
+      } else {
+        await response.drain<void>();
       }
-    } catch (_) {
+    } catch (e) {
       // Si el API aún no está levantado o no responde en el servidor,
       // proporcionamos la ruta asistida adaptada para orientación sensorial.
+      debugPrint('[NAV API] Ruta local por error del API: $e');
+    } finally {
+      client.close(force: true);
     }
 
     // 2. Ruta accesible estructurada para orientación de personas ciegas
     return _generateRouteForDestination(destination);
   }
 
-  /// Verifica si el API de navegación responde
+  /// Verifica si el API de navegación responde.
+  ///
+  /// Solo se considera disponible si responde 2xx, o 405 (el endpoint existe
+  /// pero solo acepta POST). Otros códigos (404, 426 del servidor WebSocket,
+  /// etc.) indican que ahí no hay un API de rutas.
   Future<bool> checkApiConnection() async {
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 3);
     try {
       final uri = Uri.parse(apiUrl);
-      final client = HttpClient();
-      client.connectionTimeout = const Duration(seconds: 3);
       final request = await client.getUrl(uri);
-      final response = await request.close();
-      return response.statusCode < 500;
+      final response = await request.close().timeout(const Duration(seconds: 5));
+      await response.drain<void>().catchError((_) {});
+      return isApiStatusOk(response.statusCode);
     } catch (_) {
       return false;
+    } finally {
+      client.close(force: true);
     }
   }
+
+  static bool isApiStatusOk(int statusCode) =>
+      (statusCode >= 200 && statusCode < 300) || statusCode == 405;
 
   List<NavigationStep> _generateRouteForDestination(String destination) {
     final cleanDest = destination.trim().isEmpty ? "Destino seleccionado" : destination.trim();

@@ -5,7 +5,7 @@ class StreamFrame {
 
   StreamFrame(this.visionRepository);
 
-  Future<void> execute(List<int> frameBytes) async {
-    await visionRepository.sendFrame(frameBytes);
+  Future<bool> execute(List<int> frameBytes) {
+    return visionRepository.sendFrame(frameBytes);
   }
 }
