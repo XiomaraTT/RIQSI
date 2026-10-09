@@ -15,6 +15,36 @@ class InitialConfigScreen extends StatefulWidget {
 
 class _InitialConfigScreenState extends State<InitialConfigScreen> {
   String? _lastChangedSetting;
+  late final TextEditingController _nameController = TextEditingController(
+    text: context.read<AppState>().userName,
+  );
+  bool _leaving = false;
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    super.dispose();
+  }
+
+  /// Guarda el nombre y entra a la pantalla principal. La navegación se
+  /// hace tras el frame actual para que el toque del botón (que está a la
+  /// altura de la barra inferior) no llegue a la barra de pestañas.
+  void _confirm(AppState state) {
+    if (_leaving) return;
+    _leaving = true;
+    FocusScope.of(context).unfocus();
+    state.updateUserName(_nameController.text);
+    speakUi(
+      context,
+      "${state.greeting} Configuración guardada. Estás en Inicio: "
+      "pulsa Iniciar para que Riqsi observe tu camino.",
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      Future<void>.delayed(const Duration(milliseconds: 150), () {
+        state.navigateToScreen(AppScreen.mainLayout);
+      });
+    });
+  }
 
   void _showSettingConfirmation(String settingName) {
     setState(() {
@@ -98,10 +128,71 @@ class _InitialConfigScreenState extends State<InitialConfigScreen> {
                     ),
                     const SizedBox(height: 12),
                     Text(
-                      "Ajusta los controles de audio y vibración según tus necesidades antes de comenzar.",
+                      "Dinos tu nombre si quieres y ajusta la voz y la vibración antes de comenzar.",
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
-                    const SizedBox(height: 32),
+                    const SizedBox(height: 24),
+
+                    // 0. Nombre (opcional)
+                    const Text(
+                      "¿Cómo te llamas?",
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _nameController,
+                      keyboardType: TextInputType.name,
+                      textCapitalization: TextCapitalization.words,
+                      textInputAction: TextInputAction.done,
+                      maxLength: 40,
+                      style: const TextStyle(color: Colors.white, fontSize: 18),
+                      decoration: InputDecoration(
+                        labelText: "Tu nombre (opcional)",
+                        labelStyle: const TextStyle(
+                          color: RiqsiTheme.textSecondary,
+                          fontSize: 16,
+                        ),
+                        hintText: "Ej.: Ana",
+                        hintStyle: const TextStyle(
+                          color: RiqsiTheme.textSecondary,
+                          fontSize: 18,
+                        ),
+                        counterText: "",
+                        filled: true,
+                        fillColor: RiqsiTheme.darkSurface,
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 16,
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(16),
+                          borderSide: BorderSide(
+                            color: RiqsiTheme.textSecondary.withValues(
+                              alpha: 0.3,
+                            ),
+                          ),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(16),
+                          borderSide: const BorderSide(
+                            color: RiqsiTheme.accentCyan,
+                            width: 2,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      "Si lo dejas vacío, Riqsi te saludará sin nombre.",
+                      style: TextStyle(
+                        color: RiqsiTheme.textSecondary,
+                        fontSize: 16,
+                      ),
+                    ),
+                    const SizedBox(height: 28),
 
                     // 1. Voice Speed Slider
                     _buildSectionHeader(
@@ -146,6 +237,35 @@ class _InitialConfigScreenState extends State<InitialConfigScreen> {
                           "Volumen de voz al ${(val * 100).toInt()}%",
                         );
                       },
+                    ),
+                    const SizedBox(height: 20),
+
+                    // Probar voz (junto a los ajustes de voz)
+                    OutlinedButton.icon(
+                      onPressed: () {
+                        state.testVoice();
+                        _showSettingConfirmation("Prueba de voz reproducida");
+                      },
+                      style: OutlinedButton.styleFrom(
+                        minimumSize: const Size.fromHeight(64),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 24,
+                          vertical: 16,
+                        ),
+                        foregroundColor: RiqsiTheme.accentCyan,
+                        side: const BorderSide(
+                          color: RiqsiTheme.accentCyan,
+                          width: 2,
+                        ),
+                      ),
+                      icon: const Icon(Icons.volume_up_rounded, size: 26),
+                      label: const Text(
+                        "Probar voz",
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
                     ),
                     const SizedBox(height: 24),
 
@@ -218,37 +338,6 @@ class _InitialConfigScreenState extends State<InitialConfigScreen> {
                     _buildFrequencySelector(state),
                     const SizedBox(height: 32),
 
-                    // 5. Test Voice Button
-                    OutlinedButton(
-                      onPressed: () {
-                        state.testVoice();
-                        _showSettingConfirmation("Prueba de voz reproducida");
-                      },
-                      style: OutlinedButton.styleFrom(
-                        minimumSize: const Size(double.infinity, 60),
-                        side: const BorderSide(
-                          color: RiqsiTheme.accentCyan,
-                          width: 2,
-                        ),
-                      ),
-                      child: const Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(
-                            Icons.volume_up_rounded,
-                            color: RiqsiTheme.accentCyan,
-                          ),
-                          SizedBox(width: 12),
-                          Text(
-                            "Probar voz",
-                            style: TextStyle(
-                              fontSize: 18,
-                              color: RiqsiTheme.accentCyan,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
                     const SizedBox(height: 16),
                   ],
                 ),
@@ -256,17 +345,18 @@ class _InitialConfigScreenState extends State<InitialConfigScreen> {
             ),
 
             // Giant Confirm Button at Bottom
-            Padding(
-              padding: const EdgeInsets.all(24.0),
+            Container(
+              padding: const EdgeInsets.fromLTRB(24, 12, 24, 16),
+              decoration: BoxDecoration(
+                border: Border(
+                  top: BorderSide(
+                    color: RiqsiTheme.textSecondary.withValues(alpha: 0.15),
+                  ),
+                ),
+              ),
               child: AccessibleButton(
                 label: "Confirmar y Continuar",
-                onPressed: () {
-                  state.navigateToScreen(AppScreen.mainLayout);
-                  speakUi(
-                    context,
-                    "Configuración guardada. Bienvenido a la pantalla de asistencia principal.",
-                  );
-                },
+                onPressed: () => _confirm(state),
                 semanticHint:
                     "Guardar configuración actual e ir a la pantalla principal",
               ),
