@@ -27,7 +27,7 @@ void main() {
     test('sin datos guardados devuelve los valores por defecto', () async {
       final repo = SettingsRepositoryImpl();
       final s = await repo.getSettings();
-      expect(s.serverIp, AppSettings.defaults.serverIp);
+      expect(s.userName, isEmpty, reason: 'sin nombre de fábrica');
       expect(await repo.isOnboardingSeen(), isFalse);
     });
 
@@ -35,15 +35,22 @@ void main() {
       final repo = SettingsRepositoryImpl();
       final s = await repo.getSettings();
       await repo.saveSettings(
-          s.copyWith(volume: 0.3, serverIp: '192.168.0.9', vibrationEnabled: false));
+          s.copyWith(volume: 0.3, userName: 'Ana', vibrationEnabled: false));
       await repo.setOnboardingSeen(true);
 
       final reopened = SettingsRepositoryImpl();
       final loaded = await reopened.getSettings();
       expect(loaded.volume, 0.3);
-      expect(loaded.serverIp, '192.168.0.9');
+      expect(loaded.userName, 'Ana');
       expect(loaded.vibrationEnabled, isFalse);
       expect(await reopened.isOnboardingSeen(), isTrue);
+    });
+
+    test('nombres de ejemplo antiguos se tratan como sin nombre', () {
+      expect(AppSettings.fromMap({'userName': 'Xiomara Torres'}).userName,
+          isEmpty);
+      expect(AppSettings.fromMap({'userName': 'Luis'}).userName, 'Luis');
+      expect(AppSettings.fromMap({'serverIp': '1.2.3.4'}).userName, isEmpty);
     });
 
     test('datos corruptos no rompen la carga', () async {

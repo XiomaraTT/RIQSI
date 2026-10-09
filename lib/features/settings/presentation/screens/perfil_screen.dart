@@ -36,7 +36,7 @@ class PerfilScreen extends StatelessWidget {
               "CONFIGURACIÓN",
               style: TextStyle(
                 color: RiqsiTheme.accentCyan,
-                fontSize: 14,
+                fontSize: 16,
                 fontWeight: FontWeight.bold,
                 letterSpacing: 1.5,
               ),
@@ -67,13 +67,6 @@ class PerfilScreen extends StatelessWidget {
               value: state.language,
               onTap: () {
                 announceUi(context, "Idioma fijado en Español.");
-              },
-            ),
-            _buildPreferenceRow(
-              label: "Servidor IP",
-              value: state.serverIp,
-              onTap: () {
-                _showIpEditDialog(context, state);
               },
             ),
             _buildPreferenceRow(
@@ -186,7 +179,7 @@ class PerfilScreen extends StatelessWidget {
           title,
           style: const TextStyle(
             color: RiqsiTheme.textSecondary,
-            fontSize: 14,
+            fontSize: 16,
             fontWeight: FontWeight.bold,
             letterSpacing: 1.5,
           ),
@@ -196,9 +189,8 @@ class PerfilScreen extends StatelessWidget {
   }
 
   Widget _buildProfileRow(BuildContext context, AppState state) {
-    final String displayName = state.userName == "Usuario Riqsi"
-        ? "María González"
-        : state.userName;
+    final String displayName =
+        state.hasUserName ? state.userName : "Sin nombre";
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8.0),
@@ -234,11 +226,13 @@ class PerfilScreen extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 4),
-                const Text(
-                  "Usuario activo",
-                  style: TextStyle(
+                Text(
+                  state.hasUserName
+                      ? "Usuario activo"
+                      : "Toca el lápiz para añadir tu nombre",
+                  style: const TextStyle(
                     color: RiqsiTheme.textSecondary,
-                    fontSize: 14,
+                    fontSize: 16,
                   ),
                 ),
               ],
@@ -349,9 +343,7 @@ class PerfilScreen extends StatelessWidget {
   }
 
   void _showNameEditDialog(BuildContext context, AppState state) {
-    final initial = state.userName == "Usuario Riqsi"
-        ? "María González"
-        : state.userName;
+    final initial = state.userName;
     showDialog<void>(
       context: context,
       builder: (_) => _TextEditDialog(
@@ -359,27 +351,18 @@ class PerfilScreen extends StatelessWidget {
         label: "Nombre",
         hint: "Escribe tu nombre",
         initialValue: initial,
-        validator: (v) => v.trim().isEmpty ? "Escribe un nombre." : null,
+        keyboardType: TextInputType.name,
+        // Vacío está permitido: se usa un saludo genérico.
+        validator: (v) =>
+            v.trim().length > 40 ? "El nombre es demasiado largo." : null,
         onSave: (v) {
           final name = v.trim();
           state.updateUserName(name);
-          announceUi(context, "Nombre cambiado a $name.");
+          announceUi(
+            context,
+            name.isEmpty ? "Nombre borrado." : "Nombre cambiado a $name.",
+          );
         },
-      ),
-    );
-  }
-
-  void _showIpEditDialog(BuildContext context, AppState state) {
-    showDialog<void>(
-      context: context,
-      builder: (_) => _TextEditDialog(
-        title: "Editar IP del Servidor",
-        label: "Dirección del servidor",
-        hint: "Ej: 192.168.1.15 o 10.0.2.2",
-        initialValue: state.serverIp,
-        keyboardType: TextInputType.url,
-        validator: AppState.validateServerAddress,
-        onSave: (v) => state.updateServerIp(v.trim()),
       ),
     );
   }
@@ -499,7 +482,7 @@ class _TextEditDialogState extends State<_TextEditDialog> {
           labelStyle: const TextStyle(color: RiqsiTheme.textSecondary),
           errorText: _error,
           errorMaxLines: 3,
-          errorStyle: const TextStyle(color: Color(0xFFFF8A80), fontSize: 14),
+          errorStyle: const TextStyle(color: Color(0xFFFF8A80), fontSize: 16),
           enabledBorder: const UnderlineInputBorder(
             borderSide: BorderSide(color: RiqsiTheme.accentCyan),
           ),

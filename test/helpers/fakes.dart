@@ -1,72 +1,15 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:riqsi/features/assistant/domain/repositories/tts_repository.dart';
 import 'package:riqsi/features/assistant/domain/repositories/vibration_repository.dart';
-import 'package:web_socket_channel/web_socket_channel.dart';
 
 /// Deja correr microtareas y timers de duración cero pendientes.
 Future<void> flush([int times = 5]) async {
   for (var i = 0; i < times; i++) {
     await Future<void>.delayed(Duration.zero);
   }
-}
-
-class FakeWebSocketSink extends Fake implements WebSocketSink {
-  final List<dynamic> sent = [];
-  bool closed = false;
-
-  @override
-  void add(dynamic data) {
-    if (closed) throw StateError('sink cerrado');
-    sent.add(data);
-  }
-
-  @override
-  Future close([int? closeCode, String? closeReason]) async {
-    closed = true;
-  }
-}
-
-/// Canal WebSocket falso: el test controla `ready`, los mensajes entrantes,
-/// errores y el cierre.
-class FakeWebSocketChannel extends Fake implements WebSocketChannel {
-  FakeWebSocketChannel({bool autoReady = true}) {
-    if (autoReady) readyCompleter.complete();
-  }
-
-  final StreamController<dynamic> incoming = StreamController<dynamic>();
-  final Completer<void> readyCompleter = Completer<void>();
-  final FakeWebSocketSink fakeSink = FakeWebSocketSink();
-
-  @override
-  Stream get stream => incoming.stream;
-
-  @override
-  WebSocketSink get sink => fakeSink;
-
-  @override
-  Future<void> get ready => readyCompleter.future;
-
-  void serverSend(Map<String, dynamic> json) => incoming.add(jsonEncode(json));
-}
-
-/// Factory que entrega canales falsos nuevos y los guarda para inspección.
-class FakeChannelFactory {
-  final List<FakeWebSocketChannel> created = [];
-  final List<Uri> uris = [];
-  bool autoReady = true;
-
-  WebSocketChannel call(Uri uri) {
-    uris.add(uri);
-    final ch = FakeWebSocketChannel(autoReady: autoReady);
-    created.add(ch);
-    return ch;
-  }
-
-  FakeWebSocketChannel get last => created.last;
 }
 
 /// FlutterTts falso: `speak` no termina hasta que se llame a

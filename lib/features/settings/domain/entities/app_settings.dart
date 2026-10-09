@@ -5,8 +5,8 @@ class AppSettings {
   final String alertFrequency;
   final String sensitivity;
   final String language;
+  /// Nombre del usuario; vacío si no lo indicó (saludo genérico).
   final String userName;
-  final String serverIp;
 
   AppSettings({
     required this.voiceSpeed,
@@ -16,7 +16,6 @@ class AppSettings {
     required this.sensitivity,
     required this.language,
     required this.userName,
-    required this.serverIp,
   });
 
   AppSettings copyWith({
@@ -27,7 +26,6 @@ class AppSettings {
     String? sensitivity,
     String? language,
     String? userName,
-    String? serverIp,
   }) {
     return AppSettings(
       voiceSpeed: voiceSpeed ?? this.voiceSpeed,
@@ -37,7 +35,6 @@ class AppSettings {
       sensitivity: sensitivity ?? this.sensitivity,
       language: language ?? this.language,
       userName: userName ?? this.userName,
-      serverIp: serverIp ?? this.serverIp,
     );
   }
 
@@ -48,8 +45,7 @@ class AppSettings {
         alertFrequency: 'Alta',
         sensitivity: 'Alta',
         language: 'Español',
-        userName: 'Xiomara Torres',
-        serverIp: '10.247.64.45',
+        userName: '',
       );
 
   Map<String, dynamic> toMap() => {
@@ -60,7 +56,6 @@ class AppSettings {
         'sensitivity': sensitivity,
         'language': language,
         'userName': userName,
-        'serverIp': serverIp,
       };
 
   /// Lee un mapa persistido; los campos ausentes o inválidos toman el valor
@@ -79,8 +74,18 @@ class AppSettings {
       alertFrequency: strOr(map['alertFrequency'], d.alertFrequency),
       sensitivity: strOr(map['sensitivity'], d.sensitivity),
       language: strOr(map['language'], d.language),
-      userName: strOr(map['userName'], d.userName),
-      serverIp: strOr(map['serverIp'], d.serverIp),
+      userName: _migrateName(strOr(map['userName'], d.userName)),
     );
   }
+
+  /// Nombres de ejemplo que versiones anteriores guardaban de fábrica: se
+  /// tratan como "sin nombre".
+  static const _legacyDefaultNames = {
+    'Xiomara Torres',
+    'María González',
+    'Usuario Riqsi',
+  };
+
+  static String _migrateName(String name) =>
+      _legacyDefaultNames.contains(name.trim()) ? '' : name;
 }

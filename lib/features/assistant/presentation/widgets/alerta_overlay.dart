@@ -85,8 +85,8 @@ class _AlertaOverlayState extends State<AlertaOverlay>
     final state = Provider.of<AppState>(context);
     final detection = state.activeDetection;
     final label = detection?.label ?? "Objeto";
-    final pos = detection?.relativePosition ?? "Adelante";
-    final displayText = pos == "Adelante"
+    final pos = (detection?.relativePosition ?? "").toLowerCase();
+    final displayText = (pos.isEmpty || pos == "adelante" || pos == "centro")
         ? "$label adelante"
         : "$label a la $pos";
     final distText = AlertaOverlay.distanceLabel(detection?.distancia);
