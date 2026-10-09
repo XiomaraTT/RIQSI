@@ -41,6 +41,7 @@ class _YoloCameraViewState extends State<YoloCameraView>
   final YOLOViewController _controller = YOLOViewController();
   _PermissionStatus _permission = _PermissionStatus.unknown;
   bool _modelFailed = false;
+  late double _appliedThreshold;
 
   bool get _active =>
       widget.state.assistanceState != AssistanceState.inactive;
@@ -49,6 +50,12 @@ class _YoloCameraViewState extends State<YoloCameraView>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // Se guardan en el controlador antes de que exista la vista nativa: el
+    // plugin los reaplica al conectarse (si no, usaría su umbral 0.25 y
+    // dibujaría sus propias cajas en inglés).
+    _controller.setShowOverlays(false);
+    _appliedThreshold = _confidenceThreshold;
+    _controller.setConfidenceThreshold(_appliedThreshold);
     if (_active) _checkPermission();
   }
 
@@ -59,6 +66,11 @@ class _YoloCameraViewState extends State<YoloCameraView>
       _checkPermission();
     }
     if (!_active) _modelFailed = false;
+    final threshold = _confidenceThreshold;
+    if (threshold != _appliedThreshold) {
+      _appliedThreshold = threshold;
+      _controller.setConfidenceThreshold(threshold);
+    }
   }
 
   @override
