@@ -1,226 +1,596 @@
+import 'dart:async';
 import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
+import 'package:vibration/vibration.dart';
+
 import '../../../../core/accessibility/a11y_tap.dart';
 import '../../../../core/accessibility/ui_speech.dart';
 import '../../../../core/theme/riqsi_theme.dart';
 import '../../../../state/app_state.dart';
-import '../../data/datasources/navigation_api_datasource.dart';
+import '../../data/datasources/location_service.dart';
+import '../../data/datasources/map_api_client.dart';
+import '../../domain/guidance.dart';
 
+/// Mapa con GPS real, búsqueda (Nominatim) y guía a pie por voz (OSRM).
 class MapaScreen extends StatefulWidget {
-  const MapaScreen({super.key});
+  /// Inyectables para pruebas; por defecto usan la red y el GPS reales.
+  final MapApiClient? apiClient;
+  final LocationService locationService;
+
+  const MapaScreen({
+    super.key,
+    this.apiClient,
+    this.locationService = const LocationService(),
+  });
 
   @override
   State<MapaScreen> createState() => _MapaScreenState();
 }
 
+class _Category {
+  final String label;
+  final String query;
+  final IconData icon;
+  const _Category(this.label, this.query, this.icon);
+}
+
+const _categories = [
+  _Category('Farmacias', 'farmacia', Icons.local_pharmacy_rounded),
+  _Category('Paraderos', 'parada de autobús', Icons.directions_bus_rounded),
+  _Category('Mercados', 'mercado', Icons.shopping_basket_rounded),
+  _Category('Hospitales', 'hospital', Icons.local_hospital_rounded),
+];
+
+// Patrones de vibración: izquierda = 2 pulsos cortos, derecha = 3 pulsos.
+const _vibLeft = [0, 120, 110, 120];
+const _vibRight = [0, 120, 110, 120, 110, 120];
+const _vibArrival = [0, 500];
+
+/// Centro provisional mientras llega el primer dato del GPS (Lima).
+final _fallbackCenter = LatLng(-12.0464, -77.0428);
+
 class _MapaScreenState extends State<MapaScreen> {
   final MapController _mapController = MapController();
   final TextEditingController _searchController = TextEditingController();
-  final NavigationApiDataSource _apiDataSource = NavigationApiDataSource();
+  late final MapApiClient _api = widget.apiClient ?? MapApiClient();
 
-  // Ubicación inicial del usuario (ej. Lima Centro / Av. Arequipa)
-  final LatLng _userLocation = LatLng(-12.046374, -77.042793);
-  LatLng? _destinationLocation;
-  List<LatLng> _routePolyline = [];
-
-  bool _isSearchFocused = false;
-  List<Map<String, dynamic>> _searchResults = [];
+  bool _mapReady = false;
   bool _useDarkMap = true;
-  bool _isPanelCollapsed = false;
+  bool _follow = true;
+
+  // --- Ubicación ---
+  bool _locationStarted = false;
+  LocationAccess? _access;
+  StreamSubscription<Position>? _posSub;
+  LatLng? _position;
+  double? _accuracy;
+  bool _hadFix = false;
+
+  // --- Búsqueda ---
+  bool _isSearchFocused = false;
+  bool _searching = false;
+  String _resultsTitle = 'Resultados';
+  String? _searchMessage;
+  List<Place> _results = [];
+  Timer? _debounce;
+  int _searchSeq = 0;
+
+  // --- Ruta y guía ---
+  Place? _destination;
+  WalkingRoute? _route;
+  GuidanceEngine? _engine;
+  GuidanceSnapshot? _snap;
+  bool _loadingRoute = false;
+  bool _rerouting = false;
+  DateTime? _rerouteFailedAt;
+  bool _locating = false;
+  String? _statusMessage;
 
   @override
-  void initState() {
-    super.initState();
-    _searchResults = _apiDataSource.searchPlaces("");
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // La pantalla vive en un IndexedStack: pedimos el GPS solo cuando la
+    // pestaña de mapa se muestra (TickerMode se desactiva si está oculta).
+    if (!_locationStarted && TickerMode.valuesOf(context).enabled) {
+      _locationStarted = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) => _initLocation());
+    }
   }
 
   @override
   void dispose() {
+    _posSub?.cancel();
+    _debounce?.cancel();
     _searchController.dispose();
     _mapController.dispose();
+    if (widget.apiClient == null) _api.close();
     super.dispose();
   }
 
-  void _onSearchChanged(String query) {
-    setState(() {
-      _searchResults = _apiDataSource.searchPlaces(query);
-    });
+  // -------------------------------------------------------------------------
+  // Voz y vibración
+  // -------------------------------------------------------------------------
+
+  /// Guía de navegación: siempre por el TTS de la app (es información
+  /// crítica, aunque haya lector de pantalla activo).
+  void _say(String text) {
+    if (!mounted || text.isEmpty) return;
+    context.read<AppState>().speak(text);
   }
 
-  void _selectDestination(Map<String, dynamic> place, AppState state) {
-    final destLat = place["lat"] as double;
-    final destLng = place["lng"] as double;
-    final destName = place["name"] as String;
+  Future<void> _vibrate(List<int> pattern) async {
+    if (!mounted || !context.read<AppState>().vibrationEnabled) return;
+    try {
+      if (await Vibration.hasVibrator()) {
+        await Vibration.vibrate(pattern: pattern);
+      }
+    } catch (_) {}
+  }
 
-    final destPoint = LatLng(destLat, destLng);
+  // -------------------------------------------------------------------------
+  // Ubicación
+  // -------------------------------------------------------------------------
 
+  Future<void> _initLocation({bool fromUser = false}) async {
+    final access = await widget.locationService.ensurePermission();
+    if (!mounted) return;
+    setState(() => _access = access);
+    if (access != LocationAccess.granted) {
+      final msg = LocationService.messageFor(access);
+      setState(() => _statusMessage = msg);
+      _say(msg);
+      if (fromUser) await widget.locationService.openSettings(access);
+      return;
+    }
+    setState(() => _statusMessage = 'Buscando señal GPS…');
+    final last = await widget.locationService.lastKnown();
+    if (last != null && mounted && _position == null) _onPosition(last);
+    await _posSub?.cancel();
+    _posSub = widget.locationService.positions().listen(
+      _onPosition,
+      onError: (Object e) {
+        if (!mounted) return;
+        const msg = 'Se perdió la señal GPS. Revisa que la ubicación esté activa.';
+        setState(() => _statusMessage = msg);
+        _say(msg);
+      },
+    );
+  }
+
+  void _onPosition(Position p) {
+    if (!mounted) return;
+    final ll = LatLng(p.latitude, p.longitude);
+    final firstFix = !_hadFix;
     setState(() {
-      _destinationLocation = destPoint;
-      _searchController.text = destName;
-      _isSearchFocused = false;
-
-      // Generar puntos de la ruta peatonal
-      _routePolyline = [
-        _userLocation,
-        LatLng(_userLocation.latitude - 0.0006, _userLocation.longitude),
-        LatLng(_userLocation.latitude - 0.0006, destLng),
-        destPoint,
-      ];
+      _position = ll;
+      _accuracy = p.accuracy;
+      _hadFix = true;
+      if (_statusMessage == 'Buscando señal GPS…') _statusMessage = null;
     });
+    if (_mapReady && (_follow || firstFix)) {
+      _mapController.move(ll, firstFix ? 17 : _mapController.camera.zoom);
+    }
 
-    FocusScope.of(context).unfocus();
+    final engine = _engine;
+    if (engine == null || engine.arrived || _rerouting) return;
+    if (engine.lastSnapshot?.needsReroute == true) {
+      // Re-ruta pendiente tras un fallo de red: reintentar cada 15 s.
+      final failed = _rerouteFailedAt;
+      if (failed == null ||
+          DateTime.now().difference(failed) > const Duration(seconds: 15)) {
+        _reroute();
+      }
+      return;
+    }
+    final snap = engine.update(ll, accuracy: p.accuracy);
+    setState(() => _snap = snap);
+    _handleEvents(snap.events);
+    if (snap.needsReroute) _reroute();
+  }
 
-    // Centrar mapa hacia el destino y la ruta
-    _mapController.move(destPoint, 16.5);
-
-    // Iniciar navegación asistida en AppState
-    state.startNavigation(destName);
+  void _handleEvents(List<GuidanceEvent> events, {String prefix = ''}) {
+    final text = [
+      if (prefix.isNotEmpty) prefix,
+      ...events.map((e) => e.message),
+    ].join(' ');
+    _say(text);
+    for (final e in events) {
+      if (e.type == GuidanceEventType.turn) {
+        if (e.haptic == TurnSide.left) _vibrate(_vibLeft);
+        if (e.haptic == TurnSide.right) _vibrate(_vibRight);
+      } else if (e.type == GuidanceEventType.arrived) {
+        _vibrate(_vibArrival);
+      }
+    }
   }
 
   void _recenterUser() {
-    _mapController.move(_userLocation, 17.0);
-    speakUi(context, "Centrando mapa en tu ubicación actual.");
-    context.read<AppState>().vibrate(30);
+    final pos = _position;
+    if (pos == null) {
+      _say(_noFixMessage());
+      return;
+    }
+    setState(() => _follow = true);
+    if (_mapReady) _mapController.move(pos, 17.0);
+    speakUi(context, 'Centrando mapa en tu ubicación.');
   }
+
+  String _noFixMessage() {
+    final access = _access;
+    if (access != null && access != LocationAccess.granted) {
+      return LocationService.messageFor(access);
+    }
+    return 'Aún no tengo tu ubicación. Espera la señal del GPS, mejor al aire libre.';
+  }
+
+  // -------------------------------------------------------------------------
+  // ¿Dónde estoy?
+  // -------------------------------------------------------------------------
+
+  Future<void> _whereAmI() async {
+    final pos = _position;
+    if (pos == null) {
+      _say(_noFixMessage());
+      return;
+    }
+    if (_locating) return;
+    setState(() => _locating = true);
+    _say('Buscando tu dirección.');
+    try {
+      final text = await _api.reverse(pos);
+      if (!mounted) return;
+      setState(() => _statusMessage = text);
+      _say(text);
+    } on MapApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _statusMessage = e.message);
+      _say(e.message);
+    } finally {
+      if (mounted) setState(() => _locating = false);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Búsqueda
+  // -------------------------------------------------------------------------
+
+  void _onSearchChanged(String query) {
+    _debounce?.cancel();
+    setState(() {});
+    final q = query.trim();
+    if (q.length < 3) {
+      setState(() {
+        _results = [];
+        _searchMessage = q.isEmpty ? null : 'Escribe al menos 3 letras.';
+      });
+      return;
+    }
+    // Debounce: Nominatim permite como máximo 1 petición por segundo.
+    _debounce = Timer(
+      const Duration(milliseconds: 900),
+      () => _runSearch(q, title: 'Resultados para "$q"'),
+    );
+  }
+
+  Future<void> _runSearch(
+    String query, {
+    required String title,
+    bool bounded = false,
+    bool announce = false,
+  }) async {
+    final seq = ++_searchSeq;
+    setState(() {
+      _isSearchFocused = true;
+      _searching = true;
+      _searchMessage = null;
+      _resultsTitle = title;
+    });
+    try {
+      final results = await _api.searchPlaces(
+        query,
+        near: _position,
+        bounded: bounded && _position != null,
+        radiusKm: bounded ? 3 : 15,
+      );
+      if (!mounted || seq != _searchSeq) return;
+      setState(() {
+        _results = results;
+        _searchMessage = results.isEmpty ? 'No encontré lugares.' : null;
+      });
+      if (announce) {
+        if (results.isEmpty) {
+          _say('No encontré $title.');
+        } else {
+          final first = results.first;
+          final dist = first.distanceMeters != null
+              ? ', a ${formatDistance(first.distanceMeters!)}'
+              : '';
+          _say(
+            'Encontré ${results.length} lugares. El más cercano es '
+            '${first.name}$dist. Toca un resultado para ir.',
+          );
+        }
+      }
+    } on MapApiException catch (e) {
+      if (!mounted || seq != _searchSeq) return;
+      setState(() {
+        _results = [];
+        _searchMessage = e.message;
+      });
+      _say(e.message);
+    } finally {
+      if (mounted && seq == _searchSeq) setState(() => _searching = false);
+    }
+  }
+
+  void _searchCategory(_Category cat) {
+    if (_position == null) {
+      _say(_noFixMessage());
+      return;
+    }
+    _debounce?.cancel();
+    FocusScope.of(context).unfocus();
+    _say('Buscando ${cat.label.toLowerCase()} cercanas.');
+    _runSearch(
+      cat.query,
+      title: '${cat.label} cerca de ti',
+      bounded: true,
+      announce: true,
+    );
+  }
+
+  void _closeSearch() {
+    setState(() => _isSearchFocused = false);
+    FocusScope.of(context).unfocus();
+  }
+
+  // -------------------------------------------------------------------------
+  // Ruta
+  // -------------------------------------------------------------------------
+
+  Future<void> _startRoute(Place place) async {
+    final pos = _position;
+    FocusScope.of(context).unfocus();
+    if (pos == null) {
+      _say(_noFixMessage());
+      return;
+    }
+    setState(() {
+      _isSearchFocused = false;
+      _searchController.text = place.name;
+      _destination = place;
+      _loadingRoute = true;
+      _route = null;
+      _engine = null;
+      _snap = null;
+      _statusMessage = null;
+    });
+    _say('Calculando ruta a pie hasta ${place.name}.');
+    try {
+      final route = await _api.walkingRoute(pos, place.location);
+      if (!mounted || _destination != place) return;
+      final engine = GuidanceEngine(route);
+      final start = engine.start(destinationName: place.name);
+      final snap = engine.update(_position ?? pos, accuracy: _accuracy);
+      setState(() {
+        _route = route;
+        _engine = engine;
+        _snap = snap;
+        _follow = true;
+      });
+      if (_mapReady && route.geometry.length > 1) {
+        _mapController.fitCamera(
+          CameraFit.coordinates(
+            coordinates: route.geometry,
+            padding: const EdgeInsets.fromLTRB(40, 170, 80, 330),
+            maxZoom: 18,
+          ),
+        );
+      }
+      _handleEvents(snap.events, prefix: start.message);
+      if (snap.needsReroute) _reroute();
+    } on MapApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _destination = null;
+        _statusMessage = e.message;
+      });
+      _say(e.message);
+    } finally {
+      if (mounted) setState(() => _loadingRoute = false);
+    }
+  }
+
+  Future<void> _reroute() async {
+    final dest = _destination;
+    final pos = _position;
+    if (_rerouting || dest == null || pos == null) return;
+    setState(() => _rerouting = true);
+    try {
+      final route = await _api.walkingRoute(pos, dest.location);
+      if (!mounted || _destination != dest) return;
+      final engine = GuidanceEngine(route);
+      final start = engine.start(reroute: true);
+      final snap = engine.update(_position ?? pos, accuracy: _accuracy);
+      setState(() {
+        _route = route;
+        _engine = engine;
+        _snap = snap;
+        _rerouteFailedAt = null;
+      });
+      _handleEvents(snap.events, prefix: start.message);
+    } on MapApiException catch (e) {
+      _rerouteFailedAt = DateTime.now();
+      _say('No pude recalcular la ruta. ${e.message}');
+    } finally {
+      if (mounted) setState(() => _rerouting = false);
+    }
+  }
+
+  void _repeatInstruction() {
+    final engine = _engine;
+    if (engine == null) return;
+    if (_rerouting) {
+      _say('Recalculando ruta.');
+      return;
+    }
+    _say(engine.repeatText());
+  }
+
+  void _endRoute() {
+    setState(() {
+      _destination = null;
+      _route = null;
+      _engine = null;
+      _snap = null;
+      _rerouting = false;
+      _searchController.clear();
+      _results = [];
+    });
+    _say('Ruta terminada.');
+  }
+
+  // -------------------------------------------------------------------------
+  // UI
+  // -------------------------------------------------------------------------
 
   @override
   Widget build(BuildContext context) {
-    final state = Provider.of<AppState>(context);
-    final currentStep = state.currentNavStep;
-    final isNavigating = state.isNavigating;
+    final topInset = MediaQuery.paddingOf(context).top;
+    final navigating = _destination != null;
 
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
         children: [
-          // 1. LIENZO INTERACTIVO DEL MAPA (OpenStreetMap / CartoDB)
-          _buildMapCanvas(state),
+          _buildMapCanvas(),
 
-          // 2. BARRA DE BÚSQUEDA ESTILO GOOGLE MAPS (Superior Flotante)
           SafeArea(
             child: Padding(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 14.0,
-                vertical: 8.0,
-              ),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  _buildGoogleMapsSearchBar(state),
-                  if (!_isSearchFocused) _buildCategoryFilterChips(state),
+                  _buildSearchBar(),
+                  if (!_isSearchFocused) _buildCategoryChips(),
                 ],
               ),
             ),
           ),
 
-          // 3. DESPLEGABLE DE SUGERENCIAS / RESULTADOS DE BÚSQUEDA
           if (_isSearchFocused)
             Positioned(
-              top: 110,
+              top: topInset + 76,
               left: 14,
               right: 14,
-              bottom: 120,
-              child: _buildSearchSuggestionsList(state),
+              bottom: 100,
+              child: _buildResultsPanel(),
             ),
 
-          // 4. BOTONES FLOTANTES DE CONTROL DEL MAPA (Zoom, Mi Ubicación, Capa)
           if (!_isSearchFocused)
             Positioned(
               right: 14,
-              bottom: _isPanelCollapsed ? 140 : 440,
+              top: topInset + 136,
               child: _buildMapControls(),
             ),
 
-          // 5. TARJETA FLOTANTE INFERIOR DE DIRECCIÓN Y NAVEGACIÓN PASO A PASO
-          if (!_isSearchFocused && currentStep != null)
+          if (!_isSearchFocused)
             Positioned(
               left: 12,
               right: 12,
               bottom: 84, // Por encima de la barra de navegación principal
-              child: _buildNavigationTurnCard(state, currentStep, isNavigating),
+              child: _glassCard(
+                borderColor: navigating
+                    ? _sideColor(_snap?.nextStep)
+                    : RiqsiTheme.accentCyan.withValues(alpha: 0.5),
+                child: navigating ? _buildNavigationCard() : _buildIdleCard(),
+              ),
             ),
         ],
       ),
     );
   }
 
-  /// Lienzo del Mapa con FlutterMap
-  Widget _buildMapCanvas(AppState state) {
-    // Carto dark_all ahora exige API key (devuelve "API KEY REQUIRED"):
-    // el modo oscuro usa los mismos mosaicos de OSM con un filtro oscuro.
-    const tileUrl = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
-
-    final dest = state.activeDestination;
-    final mapLabel = _destinationLocation == null
-        ? "Mapa interactivo. Tu ubicación está en el centro. Usa el buscador para elegir un destino."
-        : "Mapa interactivo con tu ubicación y la ruta hacia $dest. La guía paso a paso está en la tarjeta inferior.";
-
+  Widget _buildMapCanvas() {
+    final String label;
+    if (_position == null) {
+      label = 'Mapa. ${_statusMessage ?? 'Esperando tu ubicación GPS.'}';
+    } else if (_destination != null) {
+      label =
+          'Mapa con tu ubicación y la ruta a pie hasta ${_destination!.name}. '
+          'La indicación actual está en la tarjeta inferior.';
+    } else {
+      label = 'Mapa centrado en tu ubicación. Usa el buscador para elegir un destino.';
+    }
     return Semantics(
       container: true,
-      label: mapLabel,
-      child: ExcludeSemantics(child: _buildFlutterMap(tileUrl, state)),
+      label: label,
+      child: ExcludeSemantics(child: _buildFlutterMap()),
     );
   }
 
-  Widget _buildFlutterMap(String tileUrl, AppState state) {
+  Widget _buildFlutterMap() {
+    final pos = _position;
+    final dest = _destination;
+    final route = _route;
     return FlutterMap(
       mapController: _mapController,
       options: MapOptions(
-        initialCenter: _userLocation,
-        initialZoom: 16.5,
-        minZoom: 12.0,
-        maxZoom: 19.0,
+        initialCenter: pos ?? _fallbackCenter,
+        initialZoom: pos == null ? 13 : 17,
+        minZoom: 3,
+        maxZoom: 19,
+        onMapReady: () {
+          _mapReady = true;
+          final p = _position;
+          if (p != null) _mapController.move(p, 17);
+        },
+        onPositionChanged: (camera, hasGesture) {
+          if (hasGesture && _follow) setState(() => _follow = false);
+        },
         onTap: (_, _) {
-          if (_isSearchFocused) {
-            setState(() => _isSearchFocused = false);
-            FocusScope.of(context).unfocus();
-          }
+          if (_isSearchFocused) _closeSearch();
         },
       ),
       children: [
-        // Capa de Mosaicos de Calles (OpenStreetMap)
         TileLayer(
-          urlTemplate: tileUrl,
+          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
           userAgentPackageName: 'com.example.riqsi',
           maxZoom: 19,
           tileBuilder: _useDarkMap ? darkModeTileBuilder : null,
         ),
-
-        // Línea de Ruta Peatonal (Polyline)
-        if (_routePolyline.isNotEmpty)
+        if (route != null && route.geometry.length > 1)
           PolylineLayer(
             polylines: [
               Polyline(
-                points: _routePolyline,
+                points: route.geometry,
                 color: RiqsiTheme.accentCyan,
                 strokeWidth: 6.0,
-                borderColor: Colors.black45,
+                borderColor: Colors.black54,
                 borderStrokeWidth: 2.0,
               ),
             ],
           ),
-
-        // Marcadores: Usuario y Destino
         MarkerLayer(
           markers: [
-            // Marcador de Ubicación del Usuario (Punto azul pulsante con halo)
-            Marker(
-              point: _userLocation,
-              width: 50,
-              height: 50,
-              child: _buildUserLocationMarker(),
-            ),
-
-            // Marcador del Destino si está seleccionado
-            if (_destinationLocation != null)
+            if (pos != null)
               Marker(
-                point: _destinationLocation!,
-                width: 55,
-                height: 55,
-                child: _buildDestinationMarker(state.activeDestination),
+                point: pos,
+                width: 50,
+                height: 50,
+                child: _buildUserLocationMarker(),
+              ),
+            if (dest != null)
+              Marker(
+                point: dest.location,
+                width: 44,
+                height: 44,
+                child: _buildDestinationMarker(),
               ),
           ],
         ),
@@ -228,12 +598,10 @@ class _MapaScreenState extends State<MapaScreen> {
     );
   }
 
-  /// Marcador de Ubicación del Usuario
   Widget _buildUserLocationMarker() {
     return Stack(
       alignment: Alignment.center,
       children: [
-        // Halo exterior translúcido
         Container(
           width: 48,
           height: 48,
@@ -242,7 +610,6 @@ class _MapaScreenState extends State<MapaScreen> {
             shape: BoxShape.circle,
           ),
         ),
-        // Círculo blanco de contraste
         Container(
           width: 22,
           height: 22,
@@ -252,7 +619,6 @@ class _MapaScreenState extends State<MapaScreen> {
             boxShadow: [BoxShadow(color: Colors.black54, blurRadius: 6)],
           ),
         ),
-        // Núcleo cian de posición GPS
         Container(
           width: 14,
           height: 14,
@@ -265,31 +631,20 @@ class _MapaScreenState extends State<MapaScreen> {
     );
   }
 
-  /// Marcador del Destino seleccionado
-  Widget _buildDestinationMarker(String name) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          padding: const EdgeInsets.all(6),
-          decoration: BoxDecoration(
-            color: const Color(0xFFFF2A2A),
-            shape: BoxShape.circle,
-            border: Border.all(color: Colors.white, width: 2),
-            boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 8)],
-          ),
-          child: const Icon(
-            Icons.location_on_rounded,
-            size: 20,
-            color: Colors.white,
-          ),
-        ),
-      ],
+  Widget _buildDestinationMarker() {
+    return Container(
+      padding: const EdgeInsets.all(6),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFF2A2A),
+        shape: BoxShape.circle,
+        border: Border.all(color: Colors.white, width: 2),
+        boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 8)],
+      ),
+      child: const Icon(Icons.flag_rounded, size: 20, color: Colors.white),
     );
   }
 
-  /// Barra de búsqueda superior al estilo Google Maps
-  Widget _buildGoogleMapsSearchBar(AppState state) {
+  Widget _buildSearchBar() {
     return ClipRRect(
       borderRadius: BorderRadius.circular(28),
       child: BackdropFilter(
@@ -313,7 +668,6 @@ class _MapaScreenState extends State<MapaScreen> {
           child: Row(
             children: [
               const SizedBox(width: 14),
-              // Icono de Búsqueda
               const ExcludeSemantics(
                 child: Icon(
                   Icons.search_rounded,
@@ -322,20 +676,25 @@ class _MapaScreenState extends State<MapaScreen> {
                 ),
               ),
               const SizedBox(width: 10),
-
-              // Campo de Texto de Destino
               Expanded(
                 child: TextField(
                   controller: _searchController,
                   style: const TextStyle(color: Colors.white, fontSize: 16),
-                  onTap: () {
-                    setState(() {
-                      _isSearchFocused = true;
-                    });
-                  },
+                  textInputAction: TextInputAction.search,
+                  onTap: () => setState(() => _isSearchFocused = true),
                   onChanged: _onSearchChanged,
+                  onSubmitted: (q) {
+                    _debounce?.cancel();
+                    if (q.trim().isNotEmpty) {
+                      _runSearch(
+                        q.trim(),
+                        title: 'Resultados para "${q.trim()}"',
+                        announce: true,
+                      );
+                    }
+                  },
                   decoration: const InputDecoration(
-                    hintText: "Buscar destino o dirección...",
+                    hintText: 'Buscar destino o dirección...',
                     hintStyle: TextStyle(color: Colors.white70, fontSize: 16),
                     border: InputBorder.none,
                     isDense: true,
@@ -343,17 +702,15 @@ class _MapaScreenState extends State<MapaScreen> {
                   ),
                 ),
               ),
-
-              // Botón de limpiar (la búsqueda por voz aún no existe)
               if (_searchController.text.isNotEmpty)
                 A11yTap(
-                  label: "Borrar búsqueda y destino",
+                  label: 'Borrar búsqueda',
                   onTap: () {
+                    _debounce?.cancel();
                     _searchController.clear();
-                    _onSearchChanged("");
                     setState(() {
-                      _destinationLocation = null;
-                      _routePolyline.clear();
+                      _results = [];
+                      _searchMessage = null;
                     });
                   },
                   child: const Icon(
@@ -362,17 +719,6 @@ class _MapaScreenState extends State<MapaScreen> {
                     size: 22,
                   ),
                 ),
-
-              // Botón de Enlace API
-              A11yTap(
-                label: "Configurar enlace de la API de navegación",
-                onTap: () => _showApiModal(state),
-                child: const Icon(
-                  Icons.api_rounded,
-                  color: RiqsiTheme.accentCyan,
-                  size: 22,
-                ),
-              ),
               const SizedBox(width: 4),
             ],
           ),
@@ -381,49 +727,20 @@ class _MapaScreenState extends State<MapaScreen> {
     );
   }
 
-  /// Chips de Categorías Rápidas (Farmacias, Paraderos, Mercados, Mi Casa)
-  Widget _buildCategoryFilterChips(AppState state) {
-    final categories = [
-      {
-        "label": "Farmacias",
-        "icon": Icons.local_pharmacy_rounded,
-        "q": "Farmacia",
-      },
-      {
-        "label": "Paraderos",
-        "icon": Icons.directions_bus_rounded,
-        "q": "Paradero",
-      },
-      {
-        "label": "Mercados",
-        "icon": Icons.shopping_basket_rounded,
-        "q": "Metro",
-      },
-      {"label": "Mi Casa", "icon": Icons.home_rounded, "q": "Casa"},
-    ];
-
+  Widget _buildCategoryChips() {
     return Container(
       margin: const EdgeInsets.only(top: 4),
       height: 52,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
-        itemCount: categories.length,
+        itemCount: _categories.length,
         separatorBuilder: (_, _) => const SizedBox(width: 8),
         itemBuilder: (context, index) {
-          final cat = categories[index];
-          final label = cat["label"] as String;
-          final icon = cat["icon"] as IconData;
-          final query = cat["q"] as String;
-
+          final cat = _categories[index];
           return A11yTap(
-            label: "Ir a $label",
-            hint: "Inicia la navegación al lugar más cercano de esta categoría",
-            onTap: () {
-              final results = _apiDataSource.searchPlaces(query);
-              if (results.isNotEmpty) {
-                _selectDestination(results.first, state);
-              }
-            },
+            label: 'Buscar ${cat.label.toLowerCase()} cercanas',
+            hint: 'Muestra los lugares reales más cercanos a ti',
+            onTap: () => _searchCategory(cat),
             borderRadius: BorderRadius.circular(24),
             child: Container(
               constraints: const BoxConstraints(minHeight: 40),
@@ -439,10 +756,10 @@ class _MapaScreenState extends State<MapaScreen> {
               ),
               child: Row(
                 children: [
-                  Icon(icon, size: 16, color: RiqsiTheme.accentCyan),
+                  Icon(cat.icon, size: 16, color: RiqsiTheme.accentCyan),
                   const SizedBox(width: 6),
                   Text(
-                    label,
+                    cat.label,
                     style: const TextStyle(
                       color: Colors.white,
                       fontSize: 14,
@@ -458,8 +775,97 @@ class _MapaScreenState extends State<MapaScreen> {
     );
   }
 
-  /// Lista de Sugerencias de Búsqueda
-  Widget _buildSearchSuggestionsList(AppState state) {
+  Widget _buildResultsPanel() {
+    Widget body;
+    if (_searching) {
+      body = Semantics(
+        liveRegion: true,
+        label: 'Buscando lugares',
+        child: const Center(
+          child: CircularProgressIndicator(color: RiqsiTheme.accentCyan),
+        ),
+      );
+    } else if (_results.isEmpty) {
+      body = Center(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Text(
+            _searchMessage ??
+                'Escribe un destino o toca una categoría (Farmacias, Paraderos…).',
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Colors.white70, fontSize: 15),
+          ),
+        ),
+      );
+    } else {
+      body = ListView.separated(
+        itemCount: _results.length,
+        separatorBuilder: (_, _) =>
+            const Divider(color: Colors.white10, height: 1),
+        itemBuilder: (context, index) {
+          final place = _results[index];
+          final dist = place.distanceMeters != null
+              ? formatDistance(place.distanceMeters!)
+              : null;
+          return Semantics(
+            button: true,
+            container: true,
+            excludeSemantics: true,
+            label:
+                '${place.name}${place.address.isNotEmpty ? ', ${place.address}' : ''}'
+                '${dist != null ? ', a $dist' : ''}',
+            hint: 'Toca dos veces para iniciar la ruta a pie',
+            onTap: () => _startRoute(place),
+            child: ListTile(
+              minVerticalPadding: 10,
+              leading: Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: RiqsiTheme.accentCyan.withValues(alpha: 0.15),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.location_on_outlined,
+                  color: RiqsiTheme.accentCyan,
+                  size: 20,
+                ),
+              ),
+              title: Text(
+                place.name,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 15,
+                ),
+              ),
+              subtitle: place.address.isEmpty
+                  ? null
+                  : Text(
+                      place.address,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 14,
+                      ),
+                    ),
+              trailing: dist == null
+                  ? null
+                  : Text(
+                      dist,
+                      style: const TextStyle(
+                        color: RiqsiTheme.accentCyan,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                      ),
+                    ),
+              onTap: () => _startRoute(place),
+            ),
+          );
+        },
+      );
+    }
+
     return ClipRRect(
       borderRadius: BorderRadius.circular(20),
       child: BackdropFilter(
@@ -477,16 +883,15 @@ class _MapaScreenState extends State<MapaScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Padding(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                padding: const EdgeInsets.fromLTRB(16, 8, 8, 4),
                 child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Expanded(
                       child: Semantics(
                         header: true,
                         child: Text(
-                          "Lugares y Destinos Sugeridos",
-                          style: TextStyle(
+                          _resultsTitle,
+                          style: const TextStyle(
                             color: Colors.white70,
                             fontSize: 14,
                             fontWeight: FontWeight.bold,
@@ -495,11 +900,8 @@ class _MapaScreenState extends State<MapaScreen> {
                       ),
                     ),
                     A11yTap(
-                      label: "Cerrar lista de lugares",
-                      onTap: () {
-                        setState(() => _isSearchFocused = false);
-                        FocusScope.of(context).unfocus();
-                      },
+                      label: 'Cerrar lista de lugares',
+                      onTap: _closeSearch,
                       child: const Icon(
                         Icons.close,
                         color: Colors.white70,
@@ -510,72 +912,8 @@ class _MapaScreenState extends State<MapaScreen> {
                 ),
               ),
               const Divider(color: Colors.white12, height: 1),
-              Expanded(
-                child: Semantics(
-                  label: "Lista de ${_searchResults.length} lugares sugeridos",
-                  container: true,
-                  child: ListView.separated(
-                    itemCount: _searchResults.length,
-                    separatorBuilder: (_, _) =>
-                        const Divider(color: Colors.white10, height: 1),
-                    itemBuilder: (context, index) {
-                      final item = _searchResults[index];
-                      final name = item["name"] as String;
-                      final address = item["address"] as String;
-                      final dist = "${item["distance"]} m";
-
-                      return Semantics(
-                        button: true,
-                        container: true,
-                        excludeSemantics: true,
-                        label: "$name, $address, a $dist",
-                        hint: "Toca dos veces para iniciar la navegación",
-                        onTap: () => _selectDestination(item, state),
-                        child: ListTile(
-                          leading: Container(
-                            padding: const EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: RiqsiTheme.accentCyan.withValues(
-                                alpha: 0.15,
-                              ),
-                              shape: BoxShape.circle,
-                            ),
-                            child: const Icon(
-                              Icons.location_on_outlined,
-                              color: RiqsiTheme.accentCyan,
-                              size: 20,
-                            ),
-                          ),
-                          title: Text(
-                            name,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 15,
-                            ),
-                          ),
-                          subtitle: Text(
-                            address,
-                            style: const TextStyle(
-                              color: Colors.white70,
-                              fontSize: 14,
-                            ),
-                          ),
-                          trailing: Text(
-                            dist,
-                            style: const TextStyle(
-                              color: RiqsiTheme.accentCyan,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 14,
-                            ),
-                          ),
-                          onTap: () => _selectDestination(item, state),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-              ),
+              Expanded(child: body),
+              _attribution(),
             ],
           ),
         ),
@@ -583,66 +921,55 @@ class _MapaScreenState extends State<MapaScreen> {
     );
   }
 
-  /// Botones Flotantes de Control del Mapa (Zoom, Mi Ubicación, Capa)
   Widget _buildMapControls() {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        // Botón Mi Ubicación
-        _buildCircleButton(
-          icon: Icons.my_location_rounded,
-          tooltip: "Mi Ubicación Actual",
+        _circleButton(
+          icon: _follow ? Icons.my_location_rounded : Icons.location_searching,
+          tooltip: 'Centrar mapa en mi ubicación',
           color: RiqsiTheme.accentCyan,
           onTap: _recenterUser,
         ),
         const SizedBox(height: 8),
-
-        // Botón Capa Oscura / Estándar
-        _buildCircleButton(
-          icon: _useDarkMap
-              ? Icons.dark_mode_rounded
-              : Icons.light_mode_rounded,
-          tooltip: "Alternar modo mapa",
+        _circleButton(
+          icon: _useDarkMap ? Icons.dark_mode_rounded : Icons.light_mode_rounded,
+          tooltip: _useDarkMap ? 'Cambiar a mapa claro' : 'Cambiar a mapa oscuro',
           color: Colors.white,
-          onTap: () {
-            setState(() => _useDarkMap = !_useDarkMap);
-          },
+          onTap: () => setState(() => _useDarkMap = !_useDarkMap),
         ),
         const SizedBox(height: 8),
-
-        // Zoom In (+)
-        _buildCircleButton(
+        _circleButton(
           icon: Icons.add_rounded,
-          tooltip: "Acercar mapa",
+          tooltip: 'Acercar mapa',
           color: Colors.white,
           onTap: () {
-            final z = _mapController.camera.zoom + 1.0;
-            _mapController.move(_mapController.camera.center, z);
+            if (!_mapReady) return;
+            final cam = _mapController.camera;
+            _mapController.move(cam.center, cam.zoom + 1);
           },
         ),
         const SizedBox(height: 8),
-
-        // Zoom Out (-)
-        _buildCircleButton(
+        _circleButton(
           icon: Icons.remove_rounded,
-          tooltip: "Alejar mapa",
+          tooltip: 'Alejar mapa',
           color: Colors.white,
           onTap: () {
-            final z = _mapController.camera.zoom - 1.0;
-            _mapController.move(_mapController.camera.center, z);
+            if (!_mapReady) return;
+            final cam = _mapController.camera;
+            _mapController.move(cam.center, cam.zoom - 1);
           },
         ),
       ],
     );
   }
 
-  Widget _buildCircleButton({
+  Widget _circleButton({
     required IconData icon,
     required String tooltip,
     required Color color,
     required VoidCallback onTap,
   }) {
-    // Dibujo de 46dp; el área táctil mínima de A11yTap garantiza 48dp.
     return A11yTap(
       label: tooltip,
       onTap: onTap,
@@ -660,237 +987,246 @@ class _MapaScreenState extends State<MapaScreen> {
     );
   }
 
-  /// Tarjeta Flotante Inferior de Orientación Sensorial y Botones de las 4 Maniobras
-  Widget _buildNavigationTurnCard(
-    AppState state,
-    NavigationStep step,
-    bool isNavigating,
-  ) {
-    final visual = _getDirectionVisuals(step.direction);
-
+  Widget _glassCard({required Widget child, required Color borderColor}) {
     return ClipRRect(
       borderRadius: BorderRadius.circular(22),
       child: BackdropFilter(
         filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
         child: Container(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
           decoration: BoxDecoration(
             color: const Color(0xFF121722).withValues(alpha: 0.95),
             borderRadius: BorderRadius.circular(22),
-            border: Border.all(color: visual.color, width: 2),
+            border: Border.all(color: borderColor, width: 2),
             boxShadow: [
               BoxShadow(
-                color: visual.color.withValues(alpha: 0.25),
+                color: borderColor.withValues(alpha: 0.25),
                 blurRadius: 16,
                 spreadRadius: 1,
               ),
             ],
           ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // Barra Superior de la Tarjeta con Maniobra y Botón de Voz
-              Row(
-                children: [
-                  // Icono de Maniobra
-                  Container(
-                    width: 52,
-                    height: 52,
-                    decoration: BoxDecoration(
-                      color: visual.color.withValues(alpha: 0.2),
-                      shape: BoxShape.circle,
-                      border: Border.all(color: visual.color, width: 2),
-                    ),
-                    child: Icon(visual.icon, color: visual.color, size: 34),
-                  ),
-                  const SizedBox(width: 14),
-
-                  // Texto de Maniobra y Metros (región viva: se lee al cambiar el paso)
-                  Expanded(
-                    child: Semantics(
-                      liveRegion: true,
-                      container: true,
-                      label:
-                          "${step.directionTitle}. ${step.distanceMeters} metros. ${step.streetName}. ${step.instruction}",
-                      child: ExcludeSemantics(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              step.directionTitle,
-                              style: TextStyle(
-                                color: visual.color,
-                                fontSize: 20,
-                                fontWeight: FontWeight.w900,
-                                letterSpacing: 0.8,
-                              ),
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              "${step.distanceMeters} metros • ${step.streetName}",
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 14,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-
-                  // Botón de Repetir Voz
-                  A11yTap(
-                    label: "Repetir indicación de voz",
-                    onTap: state.repeatNavInstruction,
-                    child: const Icon(
-                      Icons.volume_up_rounded,
-                      color: RiqsiTheme.accentCyan,
-                      size: 28,
-                    ),
-                  ),
-
-                  // Botón de Colapsar/Expandir
-                  A11yTap(
-                    label: _isPanelCollapsed
-                        ? "Expandir panel de navegación"
-                        : "Contraer panel de navegación",
-                    onTap: () {
-                      setState(() => _isPanelCollapsed = !_isPanelCollapsed);
-                    },
-                    child: Icon(
-                      _isPanelCollapsed
-                          ? Icons.expand_less_rounded
-                          : Icons.expand_more_rounded,
-                      color: Colors.white70,
-                      size: 28,
-                    ),
-                  ),
-                ],
-              ),
-
-              // Contenido Expandido: Instrucción y 4 Botones Táctiles para el API
-              if (!_isPanelCollapsed) ...[
-                const SizedBox(height: 8),
-                ExcludeSemantics(
-                  child: Text(
-                    step.instruction,
-                    style: const TextStyle(color: Colors.white70, fontSize: 14),
-                  ),
-                ),
-                const SizedBox(height: 12),
-
-                // 4 botones de maniobra del API, en cuadrícula 2x2 (texto legible)
-                Row(
-                  children: [
-                    Expanded(
-                      child: _buildMiniDirectionButton(
-                        "FRENTE",
-                        NavDirection.straight,
-                        RiqsiTheme.accentCyan,
-                        Icons.arrow_upward_rounded,
-                        () => state.setNavDirection(
-                          NavDirection.straight,
-                          customInstruction:
-                              "Continúa de frente. Acera despejada.",
-                          distanceMeters: 25,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: _buildMiniDirectionButton(
-                        "DERECHA",
-                        NavDirection.right,
-                        const Color(0xFF00E676),
-                        Icons.arrow_forward_rounded,
-                        () => state.setNavDirection(
-                          NavDirection.right,
-                          customInstruction:
-                              "Gira a la derecha en la próxima esquina.",
-                          distanceMeters: 15,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Expanded(
-                      child: _buildMiniDirectionButton(
-                        "IZQUIERDA",
-                        NavDirection.left,
-                        const Color(0xFFB388FF),
-                        Icons.arrow_back_rounded,
-                        () => state.setNavDirection(
-                          NavDirection.left,
-                          customInstruction:
-                              "Gira a la izquierda con precaución.",
-                          distanceMeters: 15,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: _buildMiniDirectionButton(
-                        "ATRÁS",
-                        NavDirection.back,
-                        const Color(0xFFFF5252),
-                        Icons.u_turn_left_rounded,
-                        () => state.setNavDirection(
-                          NavDirection.back,
-                          customInstruction:
-                              "Da media vuelta. Ve hacia atrás para retomar tu ruta.",
-                          distanceMeters: 10,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ],
-          ),
+          child: child,
         ),
       ),
     );
   }
 
-  Widget _buildMiniDirectionButton(
-    String label,
-    NavDirection dir,
-    Color color,
-    IconData icon,
-    VoidCallback onTap,
-  ) {
+  Widget _attribution() {
+    return const Padding(
+      padding: EdgeInsets.only(top: 6, bottom: 2, left: 4),
+      child: Text(
+        '© OpenStreetMap · rutas OSRM',
+        style: TextStyle(color: Colors.white54, fontSize: 11),
+      ),
+    );
+  }
+
+  /// Tarjeta sin ruta: estado del GPS + botón grande "¿Dónde estoy?".
+  Widget _buildIdleCard() {
+    final access = _access;
+    final needsPermission = access != null && access != LocationAccess.granted;
+    String status;
+    if (_statusMessage != null) {
+      status = _statusMessage!;
+    } else if (_position == null) {
+      status = 'Buscando señal GPS…';
+    } else {
+      final acc = _accuracy;
+      status = acc != null
+          ? 'GPS activo · precisión ${acc.round()} m'
+          : 'GPS activo';
+    }
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Semantics(
+          liveRegion: true,
+          container: true,
+          child: Text(
+            status,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        if (needsPermission)
+          _bigButton(
+            label: 'Activar ubicación',
+            icon: Icons.location_disabled_rounded,
+            onTap: () => _initLocation(fromUser: true),
+          )
+        else
+          _bigButton(
+            label: _locating ? 'Buscando dirección…' : '¿Dónde estoy?',
+            icon: Icons.person_pin_circle_rounded,
+            onTap: _locating ? null : _whereAmI,
+            hint: 'Dice por voz la calle y el distrito donde estás',
+          ),
+        _attribution(),
+      ],
+    );
+  }
+
+  /// Tarjeta de navegación: instrucción actual grande + distancia + acciones.
+  Widget _buildNavigationCard() {
+    final snap = _snap;
+    final step = snap?.nextStep;
+    final dest = _destination!;
+    final color = _sideColor(step);
+
+    String title;
+    String detail;
+    IconData icon;
+    if (_loadingRoute) {
+      title = 'Calculando ruta…';
+      detail = 'Hacia ${dest.name}';
+      icon = Icons.alt_route_rounded;
+    } else if (_rerouting || (snap?.needsReroute ?? false)) {
+      title = 'Recalculando ruta…';
+      detail = 'Hacia ${dest.name}';
+      icon = Icons.alt_route_rounded;
+    } else if (snap == null || step == null) {
+      title = 'Esperando GPS…';
+      detail = 'Hacia ${dest.name}';
+      icon = Icons.gps_not_fixed_rounded;
+    } else if (snap.arrived) {
+      title = 'Has llegado a tu destino';
+      detail = dest.name;
+      icon = Icons.check_circle_rounded;
+    } else {
+      title = step.isArrival ? 'Destino: ${dest.name}' : step.instruction;
+      detail =
+          'En ${formatDistance(snap.distanceToNext)} · '
+          'faltan ${formatDistance(snap.distanceToDestination)}';
+      icon = _stepIcon(step);
+    }
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Semantics(
+          container: true,
+          label: '$title. $detail',
+          child: ExcludeSemantics(
+            child: Row(
+              children: [
+                Container(
+                  width: 56,
+                  height: 56,
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: 0.2),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: color, width: 2),
+                  ),
+                  child: Icon(icon, color: color, size: 34),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 22,
+                          fontWeight: FontWeight.w800,
+                          height: 1.15,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        detail,
+                        style: TextStyle(
+                          color: color,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: _actionButton(
+                label: 'Repetir',
+                icon: Icons.volume_up_rounded,
+                color: RiqsiTheme.accentCyan,
+                onTap: _engine == null ? null : _repeatInstruction,
+                semanticsLabel: 'Repetir indicación',
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _actionButton(
+                label: '¿Dónde estoy?',
+                icon: Icons.person_pin_circle_rounded,
+                color: Colors.white,
+                onTap: _locating ? null : _whereAmI,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _actionButton(
+                label: 'Terminar',
+                icon: Icons.close_rounded,
+                color: const Color(0xFFFF5252),
+                onTap: _endRoute,
+                semanticsLabel: 'Terminar ruta',
+              ),
+            ),
+          ],
+        ),
+        _attribution(),
+      ],
+    );
+  }
+
+  Widget _bigButton({
+    required String label,
+    required IconData icon,
+    required VoidCallback? onTap,
+    String? hint,
+  }) {
     return A11yTap(
-      label: "Indicar dirección: ${label.toLowerCase()}",
+      label: label,
+      hint: hint,
       onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
+      showTooltip: false,
+      borderRadius: BorderRadius.circular(16),
       child: Container(
-        width: double.infinity,
-        constraints: const BoxConstraints(minHeight: 48),
-        padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 6),
+        constraints: const BoxConstraints(minHeight: 64),
+        alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.15),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: color, width: 1.5),
+          color: RiqsiTheme.accentCyan,
+          borderRadius: BorderRadius.circular(16),
         ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, color: color, size: 20),
-            const SizedBox(width: 6),
+            Icon(icon, color: Colors.black, size: 28),
+            const SizedBox(width: 10),
             Flexible(
               child: Text(
                 label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: color,
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold,
+                style: const TextStyle(
+                  color: Colors.black,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w800,
                 ),
               ),
             ),
@@ -900,151 +1236,72 @@ class _MapaScreenState extends State<MapaScreen> {
     );
   }
 
-  void _showApiModal(AppState state) {
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => _ApiUrlDialog(
-        initialUrl: state.navigationApiUrl,
-        onTest: state.testNavApiConnection,
-        onSave: (url) => state.updateNavApiUrl(url),
+  Widget _actionButton({
+    required String label,
+    required IconData icon,
+    required Color color,
+    required VoidCallback? onTap,
+    String? semanticsLabel,
+  }) {
+    return A11yTap(
+      label: semanticsLabel ?? label,
+      onTap: onTap,
+      showTooltip: false,
+      borderRadius: BorderRadius.circular(14),
+      child: Container(
+        constraints: const BoxConstraints(minHeight: 60),
+        padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.14),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: color, width: 1.5),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, color: color, size: 24),
+            const SizedBox(height: 2),
+            Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: color,
+                fontSize: 13,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
-  _DirectionVisuals _getDirectionVisuals(NavDirection dir) {
-    switch (dir) {
-      case NavDirection.straight:
-        return _DirectionVisuals(
-          color: RiqsiTheme.accentCyan,
-          icon: Icons.arrow_upward_rounded,
-        );
-      case NavDirection.right:
-        return _DirectionVisuals(
-          color: const Color(0xFF00E676),
-          icon: Icons.arrow_forward_rounded,
-        );
-      case NavDirection.left:
-        return _DirectionVisuals(
-          color: const Color(0xFFB388FF),
-          icon: Icons.arrow_back_rounded,
-        );
-      case NavDirection.back:
-        return _DirectionVisuals(
-          color: const Color(0xFFFF5252),
-          icon: Icons.u_turn_left_rounded,
-        );
-      case NavDirection.arrived:
-        return _DirectionVisuals(
-          color: const Color(0xFFFFD600),
-          icon: Icons.check_circle_rounded,
-        );
+  Color _sideColor(RouteStep? step) {
+    if (step == null) return RiqsiTheme.accentCyan;
+    if (_snap?.arrived ?? false) return const Color(0xFFFFD600);
+    if (step.isArrival) return const Color(0xFFFFD600);
+    switch (step.side) {
+      case TurnSide.right:
+        return const Color(0xFF00E676);
+      case TurnSide.left:
+        return const Color(0xFFB388FF);
+      case TurnSide.none:
+        return RiqsiTheme.accentCyan;
     }
   }
-}
 
-class _DirectionVisuals {
-  final Color color;
-  final IconData icon;
-
-  _DirectionVisuals({required this.color, required this.icon});
-}
-
-/// Diálogo de URL de la API; el controlador vive y se libera en su State.
-class _ApiUrlDialog extends StatefulWidget {
-  final String initialUrl;
-  final VoidCallback onTest;
-  final ValueChanged<String> onSave;
-
-  const _ApiUrlDialog({
-    required this.initialUrl,
-    required this.onTest,
-    required this.onSave,
-  });
-
-  @override
-  State<_ApiUrlDialog> createState() => _ApiUrlDialogState();
-}
-
-class _ApiUrlDialogState extends State<_ApiUrlDialog> {
-  late final TextEditingController _controller = TextEditingController(
-    text: widget.initialUrl,
-  );
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      backgroundColor: const Color(0xFF161B26),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-      title: const Row(
-        children: [
-          ExcludeSemantics(
-            child: Icon(Icons.api_rounded, color: RiqsiTheme.accentCyan),
-          ),
-          SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              "API de Navegación",
-              style: TextStyle(color: Colors.white, fontSize: 18),
-            ),
-          ),
-        ],
-      ),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            "URL del backend para cálculo de rutas y direcciones en tiempo real:",
-            style: TextStyle(color: Colors.white70, fontSize: 14),
-          ),
-          const SizedBox(height: 10),
-          TextField(
-            controller: _controller,
-            style: const TextStyle(color: Colors.white),
-            decoration: InputDecoration(
-              labelText: "URL de la API",
-              labelStyle: const TextStyle(color: Colors.white70),
-              filled: true,
-              fillColor: Colors.black38,
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-              hintText: "http://10.247.64.45:8765/api/route",
-              hintStyle: const TextStyle(color: Colors.white70),
-            ),
-          ),
-        ],
-      ),
-      actions: [
-        TextButton(
-          onPressed: () {
-            Navigator.pop(context);
-            widget.onTest();
-          },
-          child: const Text(
-            "Probar Conexión",
-            style: TextStyle(color: RiqsiTheme.accentCyan),
-          ),
-        ),
-        ElevatedButton(
-          style: ElevatedButton.styleFrom(
-            backgroundColor: RiqsiTheme.accentCyan,
-            foregroundColor: Colors.black,
-            minimumSize: const Size(48, 48),
-          ),
-          onPressed: () {
-            widget.onSave(_controller.text.trim());
-            Navigator.pop(context);
-          },
-          child: const Text("Guardar"),
-        ),
-      ],
-    );
+  IconData _stepIcon(RouteStep step) {
+    if (step.isArrival) return Icons.flag_rounded;
+    if (step.modifier == 'uturn') return Icons.u_turn_left_rounded;
+    if (step.type.contains('roundabout') || step.type.contains('rotary')) {
+      return Icons.roundabout_right_rounded;
+    }
+    final m = step.modifier ?? '';
+    if (m == 'slight right') return Icons.turn_slight_right_rounded;
+    if (m == 'slight left') return Icons.turn_slight_left_rounded;
+    if (m.contains('right')) return Icons.turn_right_rounded;
+    if (m.contains('left')) return Icons.turn_left_rounded;
+    return Icons.straight_rounded;
   }
 }
