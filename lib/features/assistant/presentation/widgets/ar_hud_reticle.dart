@@ -152,7 +152,7 @@ class _ArHudReticleState extends State<ArHudReticle>
                               detection.relativePosition.toUpperCase(),
                               style: TextStyle(
                                 color: themeColor,
-                                fontSize: 12,
+                                fontSize: 16,
                                 fontWeight: FontWeight.bold,
                                 letterSpacing: 1.0,
                               ),

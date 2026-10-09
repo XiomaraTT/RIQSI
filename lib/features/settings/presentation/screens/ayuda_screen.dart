@@ -156,7 +156,7 @@ class AyudaScreen extends StatelessWidget {
             const SizedBox(height: 4),
             const Text(
               "Los comandos de voz estarán disponibles próximamente. Por ahora, usa estos controles. Toca uno para escuchar su función.",
-              style: TextStyle(color: RiqsiTheme.textSecondary, fontSize: 15),
+              style: TextStyle(color: RiqsiTheme.textSecondary, fontSize: 16),
             ),
             const SizedBox(height: 12),
 
@@ -205,7 +205,7 @@ class AyudaScreen extends StatelessWidget {
                                   command['desc']!,
                                   style: const TextStyle(
                                     color: Colors.white70,
-                                    fontSize: 15,
+                                    fontSize: 16,
                                   ),
                                 ),
                               ],

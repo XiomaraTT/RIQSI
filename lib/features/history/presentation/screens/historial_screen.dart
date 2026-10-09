@@ -113,7 +113,7 @@ class HistorialScreen extends StatelessWidget {
     return Semantics(
       button: true,
       label:
-          "Detección a las $timeStr. ${event.label} ${event.relativePosition == 'Adelante' ? 'adelante' : 'a la ${event.relativePosition}'}. Riesgo ${event.riskLevel}.",
+          "Detección a las $timeStr. ${event.label} ${_posText(event.relativePosition)}. Riesgo ${event.riskLevel}.",
       hint: "Toca dos veces para escuchar la descripción de voz nuevamente",
       excludeSemantics: true,
       onTap: () {
@@ -200,7 +200,7 @@ class HistorialScreen extends StatelessWidget {
                               "Posición: ${event.relativePosition}",
                               style: const TextStyle(
                                 color: RiqsiTheme.textSecondary,
-                                fontSize: 14,
+                                fontSize: 16,
                               ),
                               overflow: TextOverflow.ellipsis,
                             ),
@@ -231,7 +231,7 @@ class HistorialScreen extends StatelessWidget {
                         style: TextStyle(
                           color: riskColor,
                           fontWeight: FontWeight.bold,
-                          fontSize: 14,
+                          fontSize: 16,
                         ),
                       ),
                     ],
@@ -244,4 +244,11 @@ class HistorialScreen extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Posición hablada: "adelante" para el centro, "a la izquierda/derecha".
+String _posText(String pos) {
+  final p = pos.toLowerCase();
+  if (p.isEmpty || p == 'adelante' || p == 'centro') return 'adelante';
+  return 'a la $p';
 }

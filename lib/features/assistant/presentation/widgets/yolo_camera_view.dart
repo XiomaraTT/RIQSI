@@ -325,7 +325,7 @@ class _YoloCameraViewState extends State<YoloCameraView>
                 obj.label.toUpperCase(),
                 style: const TextStyle(
                   color: Colors.black,
-                  fontSize: 14,
+                  fontSize: 16,
                   fontWeight: FontWeight.w900,
                 ),
               ),
