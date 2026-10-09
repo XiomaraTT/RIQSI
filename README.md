@@ -1,57 +1,104 @@
 # Riqsi - Asistente de Visión Inteligente 👁️📱
 
-Riqsi es un asistente inteligente de visión del entorno para personas con discapacidad visual. Esta versión utiliza una arquitectura híbrida de visión artificial: la cámara del celular envía imágenes a la PC, que las analiza con OpenCV y YOLOv8 y devuelve las detecciones en tiempo real al teléfono a través de WebSockets, donde el usuario escucha la descripción por voz (TTS real) y siente la vibración.
+Riqsi es un asistente inteligente de visión del entorno para personas con discapacidad visual. Detecta obstáculos (personas, autos, puertas, etc.) con la cámara del celular y avisa **por voz en español** y **por vibración** según qué tan cerca están. También incluye un mapa con **GPS real** y rutas a pie guiadas por voz.
 
 ---
 
-## 🛠️ Requisitos de Instalación (PC)
+## ⚙️ Cómo funciona ahora
 
-El **celular envía su cámara** al servidor que corre en tu PC; la PC ejecuta YOLOv8 y devuelve las detecciones al teléfono.
+Toda la detección corre **dentro del celular**, sin PC, sin servidor y sin Wi-Fi. La app incluye el modelo **YOLO11n (COCO)** y lo ejecuta con el plugin oficial [`ultralytics_yolo`](https://pub.dev/packages/ultralytics_yolo). Solo el mapa y las rutas necesitan internet.
 
-1. Asegúrate de tener instalado **Python 3.10+**.
-2. Instala las dependencias del servidor desde la raíz del proyecto:
-   ```bash
-   pip install -r server/requirements.txt
-   ```
-   *(Los modelos `yolov8n.pt` y `best.pt` ya vienen en la raíz del repositorio.)*
-
----
-
-## 🚀 Guía de Ejecución Paso a Paso
-
-### 1. Iniciar el Servidor de Visión (PC)
-```bash
-python server/detector.py
 ```
-El servidor escucha en el puerto **8765** y atiende a **un solo celular a la vez** (si se conecta otro, se cierra el anterior).
+  Cámara del celular
+         │
+         ▼
+  YOLO11n en el teléfono (ultralytics_yolo, sin internet)
+         │  objetos + posición + distancia estimada
+         ▼
+  Voz en español (TTS)  +  Vibración según la distancia
 
-* **Token opcional:** define la variable de entorno `RIQSI_TOKEN` antes de iniciar y el servidor exigirá `?token=...` en la URL de conexión. Si no la defines, acepta conexiones como siempre (la app aún no envía token).
-* **Monitor opcional:** `python server/detector.py --monitor` (o `RIQSI_MONITOR=1`) abre una ventana "Riqsi Monitor" para depurar lo que ve el servidor. Por defecto está apagado.
-* **Pruebas:** `python -m pytest server/tests -q`
-
----
-
-### 2. Conectar el Cliente Móvil (Celular)
-1. Conecta tu celular y tu PC a la **misma red Wi-Fi**.
-2. Obtén la **dirección IP local** de tu PC (en Windows abre `cmd` y escribe `ipconfig`, busca la dirección IPv4, por ejemplo `192.168.1.15`).
-3. En la aplicación Riqsi en tu teléfono móvil:
-   * Ve a la pestaña **Perfil** (tercer icono abajo).
-   * Selecciona la opción **Servidor IP** e ingresa la dirección IP de tu PC.
-   * Guarda los cambios.
-4. Regresa a la pestaña **Inicio** y presiona el gran botón de play central.
-5. ¡Listo! La cámara de tu celular se enviará a la PC, que analizará cada imagen. El teléfono **reproducirá el audio en voz alta en español** y **vibrará** cuando haya un obstáculo cerca.
+  Mapa:  GPS (geolocator) ─► Nominatim (buscar lugares)
+                          ─► OSRM routing.openstreetmap.de (ruta a pie)
+                          ─► guía por voz   [requiere internet]
+```
 
 ---
 
-## 🧯 Si "el servidor no sirve" (solución de problemas)
+## 📲 Instalar y ejecutar la app
 
-| Síntoma | Causa más común | Qué hacer |
-|---|---|---|
-| Al ejecutar sale `ModuleNotFoundError: No module named 'ultralytics'` (o `cv2`, `numpy`) | Se instaló solo `opencv-python websockets` | `pip install -r server/requirements.txt` (YOLO **no** es opcional) |
-| `No se pudo abrir el puerto 8765` | Ya hay otro servidor abierto | Cierra la otra ventana o usa `python server/detector.py --port 8766` |
-| La app dice **"Sin conexión con el servidor"** / **RECONECTANDO** | IP equivocada en la app | Usa la IP que imprime el servidor al arrancar ("Escribe en la app…"), no la de otra PC |
-| La IP es correcta pero igual no conecta | **Firewall de Windows** bloquea a Python | La primera vez que corre, Windows pregunta: marca **Redes privadas** y "Permitir". O en `cmd` como administrador: `netsh advfirewall firewall add rule name="RIQSI 8765" dir=in action=allow protocol=TCP localport=8765` |
-| Igual no conecta en la universidad / Wi-Fi público | La red aísla a los dispositivos entre sí | Usa el **hotspot del celular** (conecta la PC a él) o conecta el celular por USB y ejecuta `adb reverse tcp:8765 tcp:8765`; en la app pon `127.0.0.1` |
-| Conecta pero nunca detecta nada | La cámara está tapada u oscura | Apunta la cámara trasera a personas, autos, postes, puertas… |
+Requisitos: **Flutter** instalado y un celular Android (recomendado) con la depuración USB activada.
 
-Para comprobar el servidor sin el celular: `python -m pytest server/tests -q` (lógica) y, con el servidor abierto, abrir la app en un celular de la misma red.
+```bash
+flutter pub get
+flutter run                 # ejecuta en el celular conectado
+flutter build apk --release # genera el APK en build/app/outputs/flutter-apk/
+```
+
+**Permisos** que pedirá la app la primera vez:
+* 📷 **Cámara**: para detectar obstáculos.
+* 📍 **Ubicación**: para el mapa, "¿Dónde estoy?" y la guía de rutas.
+
+---
+
+## 🧭 Uso
+
+### Inicio
+* Presiona el gran botón central para **iniciar** o **detener** la detección.
+* La app **dice en voz alta** lo que detecta (por ejemplo "persona cerca") y **vibra** según la distancia: cuanto más cerca está el obstáculo, más rápida e intensa es la vibración.
+
+### Mapa
+* **Buscar** un lugar (Nominatim / OpenStreetMap) y elegir el resultado.
+* **Ruta a pie** hasta el destino, con indicaciones por voz paso a paso.
+* Botón **"¿Dónde estoy?"**: la app dice tu ubicación actual por voz.
+
+### Perfil
+* **Voz**: elegir la voz del lector.
+* **Volumen** de la voz.
+* **Vibración**: activar/desactivar o ajustar la intensidad.
+
+---
+
+## ♿ Accesibilidad
+
+Riqsi está pensada para usarse con **TalkBack** (Android) activado: los botones y pantallas tienen etiquetas semánticas, y la información importante se comunica también por voz y vibración, no solo visualmente.
+
+---
+
+## ⚠️ Limitaciones honestas
+
+* La **distancia es estimada** y no está calibrada: úsala como referencia, no como medida exacta.
+* Necesita **buena luz**; con poca luz o la cámara tapada la detección falla.
+* **Postes y conos** dependen del modelo especializado `best.pt`, que **hay que reentrenar**: actualmente tiene 15 clases de basura y no detecta bien esos obstáculos. La app usa por ahora YOLO11n COCO.
+* El **mapa y las rutas necesitan datos/internet**, y la precisión depende del GPS y de la cobertura de OpenStreetMap.
+* No reemplaza al bastón ni a otras ayudas de movilidad.
+
+---
+
+## 👥 Para el equipo: carpeta `server/` (opcional)
+
+La carpeta `server/` **ya no la usa la app**. Se conserva solo como herramienta del equipo para pruebas y entrenamiento (detector en PC con OpenCV + YOLO por WebSocket).
+
+```bash
+pip install -r server/requirements.txt
+python server/detector.py          # escucha en el puerto 8765
+python -m pytest server/tests -q   # pruebas
+```
+*(Los modelos `yolov8n.pt` y `best.pt` están en la raíz del repositorio.)*
+
+### Servidor (opcional)
+
+Opciones: `RIQSI_TOKEN` exige `?token=...` en la conexión; `--monitor` (o `RIQSI_MONITOR=1`) abre una ventana de depuración; `--port` cambia el puerto.
+
+| Síntoma | Qué hacer |
+|---|---|
+| `ModuleNotFoundError: No module named 'ultralytics'` (o `cv2`, `numpy`) | `pip install -r server/requirements.txt` |
+| `No se pudo abrir el puerto 8765` | Cierra el otro servidor o usa `--port 8766` |
+| Un cliente no conecta | Revisa la IP, el **Firewall de Windows** (permitir Python en redes privadas) y que la red no aísle los dispositivos |
+
+---
+
+## 📜 Licencia y atribuciones
+
+* **AGPL-3.0**: `ultralytics` y sus modelos (YOLO) están bajo licencia AGPL-3.0, por lo que este proyecto se distribuye bajo los mismos términos.
+* Mapas y búsqueda: © colaboradores de **OpenStreetMap** (datos bajo ODbL), mediante Nominatim.
+* Rutas a pie: **OSRM** con el servidor `routing.openstreetmap.de`.
