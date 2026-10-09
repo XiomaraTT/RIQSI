@@ -8,9 +8,9 @@ class DetectionEvent {
   final DateTime timestamp;
   final String description;
   final String distancia;        // 'muy_cerca', 'cerca', 'lejos', 'despejado'
-  final bool announceVoice;      // true para hablar, false para solo modular vibración
+  final bool announceVoice;      // true para hablar, false para solo vibrar
   final List<DetectedObject> objects;
-  final bool isClear;            // true si el servidor envió type == 'clear'
+  final bool isClear;            // true si la escena está despejada
 
   DetectionEvent({
     required this.id,

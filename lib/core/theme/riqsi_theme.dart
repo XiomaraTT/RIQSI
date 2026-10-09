@@ -14,6 +14,18 @@ class RiqsiTheme {
   static const Color alertMedium = Color(0xFFFFB300);
   static const Color alertLow = Color(0xFF00E676);
 
+  /// Color por nivel de riesgo ('Alto' | 'Medio' | 'Bajo').
+  static Color riskColor(String risk) {
+    switch (risk) {
+      case 'Alto':
+        return alertHigh;
+      case 'Medio':
+        return alertMedium;
+      default:
+        return alertLow;
+    }
+  }
+
   static ThemeData get darkTheme {
     return ThemeData(
       useMaterial3: true,

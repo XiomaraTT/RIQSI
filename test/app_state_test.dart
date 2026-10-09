@@ -1,28 +1,48 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:riqsi/features/assistant/data/datasources/websocket_datasource.dart';
-import 'package:riqsi/features/assistant/data/repositories/vision_repository_impl.dart';
+import 'package:riqsi/features/assistant/domain/scene/scene_logic.dart';
 import 'package:riqsi/state/app_state.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'helpers/fakes.dart';
 
+/// Analizador real que además cuenta las llamadas.
+class CountingAnalyzer extends SceneAnalyzer {
+  final List<int> calls = [];
+  int resets = 0;
+
+  @override
+  SceneResult analyse(List<RawDetection> detections, {required int nowMs}) {
+    calls.add(nowMs);
+    return super.analyse(detections, nowMs: nowMs);
+  }
+
+  @override
+  void reset() {
+    resets++;
+    super.reset();
+  }
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  late FakeChannelFactory factory;
   late RecordingTtsRepository tts;
   late NoopVibrationRepository vibration;
+  late CountingAnalyzer analyzer;
   late AppState state;
+  var now = 0;
 
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
-    factory = FakeChannelFactory();
     tts = RecordingTtsRepository();
     vibration = NoopVibrationRepository();
+    analyzer = CountingAnalyzer();
+    now = 1000;
     state = AppState(
-      webSocketDataSource: WebSocketDataSource(channelFactory: factory.call),
       ttsRepository: tts,
       vibrationRepository: vibration,
+      sceneAnalyzer: analyzer,
+      clockMs: () => now,
       splashDuration: const Duration(hours: 1),
     );
     await state.ready;
@@ -30,99 +50,46 @@ void main() {
 
   tearDown(() => state.dispose());
 
-  Future<void> startAssistance() async {
+  void startAssistance() {
     state.toggleAssistance();
-    await flush();
-    expect(state.connectionStatus, ServerConnectionStatus.connected);
     tts.calls.clear();
   }
 
-  Map<String, dynamic> detection({
-    String label = 'Persona',
+  var seq = 0;
+  DetectionEvent detection({
+    String label = 'persona',
+    String pos = 'centro',
     String risk = 'Medio',
-    bool? announce,
+    bool announce = false,
     String distancia = 'cerca',
     String description = 'Persona adelante',
+    bool clear = false,
   }) =>
-      {
-        'type': 'detection',
-        'label': label,
-        'position': 'Adelante',
-        'risk': risk,
-        'description': description,
-        'distancia': distancia,
-        'announce_voice': ?announce,
-        'objects': [],
-      };
+      DetectionEvent(
+        id: 'e${seq++}',
+        label: clear ? '' : label,
+        relativePosition: clear ? '' : pos,
+        riskLevel: risk,
+        timestamp: DateTime(2026),
+        description: clear ? '' : description,
+        distancia: clear ? 'despejado' : distancia,
+        announceVoice: announce,
+        isClear: clear,
+      );
 
-  group('validación de IP', () {
-    test('acepta IPv4 y nombres de equipo', () {
-      for (final ok in [
-        '192.168.1.15',
-        ' 10.0.2.2 ',
-        '0.0.0.0',
-        'localhost',
-        'mi-servidor.local',
-        'riqsi-pc',
-      ]) {
-        expect(AppState.validateServerAddress(ok), isNull, reason: ok);
-      }
-    });
-
-    test('rechaza vacíos y formatos inválidos', () {
-      for (final bad in [
-        '',
-        '   ',
-        '999.1.1.1',
-        '1.2.3',
-        '1.2.3.4.5',
-        'http://1.2.3.4',
-        '1.2.3.4:8765',
-        'host_con_guion_bajo',
-        '-abc',
-        'a..b',
-      ]) {
-        expect(AppState.validateServerAddress(bad), isNotNull, reason: bad);
-      }
-    });
-
-    test('updateServerIp guarda la IP recortada o devuelve el error', () {
-      final previous = state.serverIp;
-      expect(state.updateServerIp('no válida!'), isNotNull);
-      expect(state.serverIp, previous);
-
-      expect(state.updateServerIp('  192.168.1.20  '), isNull);
-      expect(state.serverIp, '192.168.1.20');
-    });
-
-    test('cambiar la IP con la asistencia activa reconecta', () async {
-      await startAssistance();
-      expect(factory.uris.last.host, state.serverIp);
-
-      state.updateServerIp('192.168.1.77');
-      await flush();
-      expect(factory.created, hasLength(2));
-      expect(factory.uris.last.host, '192.168.1.77');
-      expect(factory.created.first.fakeSink.closed, isTrue);
-      expect(state.connectionStatus, ServerConnectionStatus.connected);
-    });
-  });
-
-  group('voz y silencio', () {
-    test('con la voz silenciada no suenan frases normales pero sí riesgo Alto',
-        () async {
-      await startAssistance();
+  group('voz y alertas', () {
+    test('riesgo Alto anunciado: alerta prioritaria aunque la voz esté en 0',
+        () {
+      startAssistance();
       state.updateVolume(0);
-      await flush();
 
       state.speak('Controles visibles');
-      factory.last.serverSend(detection(
-          label: 'Hueco',
+      state.applyDetection(detection(
+          label: 'hueco',
           risk: 'Alto',
-          announce: false,
-          distancia: 'inmediato',
+          announce: true,
+          distancia: 'muy_cerca',
           description: '¡Cuidado! Hueco adelante'));
-      await flush();
 
       expect(tts.texts, ['¡Cuidado! Hueco adelante']);
       expect(tts.alerts.single.volume, greaterThan(0));
@@ -130,152 +97,119 @@ void main() {
       expect(vibration.proximity.last, 'muy_cerca');
     });
 
-    test('riesgo Alto con announce_voice=false no se repite en cada frame',
-        () async {
-      await startAssistance();
-      for (var i = 0; i < 5; i++) {
-        factory.last.serverSend(detection(
-            label: 'Auto', risk: 'Alto', announce: false, description: 'Auto'));
-      }
-      await flush();
-      expect(tts.alerts, hasLength(1));
+    test('sin announce no se habla, pero sí se vibra y se muestra', () {
+      startAssistance();
+      state.applyDetection(detection(risk: 'Alto', announce: false));
+      state.applyDetection(detection(risk: 'Medio', announce: false));
+      expect(tts.calls, isEmpty);
+      expect(vibration.proximity, ['cerca', 'cerca']);
+      expect(state.activeDetection, isNotNull);
     });
 
-    test('Medio/Bajo respetan announce_voice (por defecto no se anuncia)',
-        () async {
-      await startAssistance();
-      factory.last.serverSend(detection(announce: null));
-      factory.last.serverSend(detection(announce: false));
-      await flush();
-      expect(tts.calls, isEmpty);
-
-      factory.last.serverSend(detection(announce: true));
-      await flush();
+    test('Medio/Bajo anunciados usan la voz normal', () {
+      startAssistance();
+      state.applyDetection(detection(announce: true));
       expect(tts.texts, ['Persona adelante']);
+      expect(tts.alerts, isEmpty);
+      expect(state.assistanceState, AssistanceState.objectDetected);
+    });
+
+    test('con la asistencia detenida se ignoran las detecciones', () {
+      state.applyDetection(detection(announce: true));
+      state.onRawDetections(const []);
+      expect(tts.calls, isEmpty);
+      expect(analyzer.calls, isEmpty);
+      expect(state.activeDetection, isNull);
+    });
+
+    test('Entendido evita reabrir la misma alerta durante el cooldown', () {
+      startAssistance();
+      state.applyDetection(detection(risk: 'Alto'));
+      expect(state.assistanceState, AssistanceState.riskDetected);
+      state.dismissAlert();
+
+      now += 1000;
+      state.applyDetection(detection(risk: 'Alto', announce: true));
+      expect(state.assistanceState, AssistanceState.objectDetected);
+      expect(tts.alerts, hasLength(1), reason: 'se sigue avisando por voz');
+
+      now += AppState.alertDismissCooldown.inMilliseconds;
+      state.applyDetection(detection(risk: 'Alto'));
+      expect(state.assistanceState, AssistanceState.riskDetected);
+    });
+  });
+
+  group('cámara → analizador', () {
+    test('procesa como máximo ~8 resultados por segundo', () {
+      startAssistance();
+      for (final t in [0, 50, 119, 120, 200, 239, 240, 1000]) {
+        now = 5000 + t;
+        state.onRawDetections(const []);
+      }
+      expect(analyzer.calls, [5000, 5120, 5240, 6000]);
+    });
+
+    test('escena vacía: vibración despejado y sin cambio de estado', () {
+      startAssistance();
+      state.onRawDetections(const []);
+      expect(vibration.proximity.last, 'despejado');
+      expect(state.assistanceState, AssistanceState.analyzing);
+      expect(state.statusHeadline, 'Camino despejado');
+    });
+
+    test('iniciar reinicia el analizador; detener para la vibración', () {
+      startAssistance();
+      expect(analyzer.resets, 1);
+      state.toggleAssistance();
+      expect(state.assistanceState, AssistanceState.inactive);
+      expect(vibration.stopCalls, greaterThan(0));
+      state.onRawDetections(const []);
+      expect(analyzer.calls, isEmpty);
     });
   });
 
   group('historial', () {
-    test('no guarda clear ni detecciones no anunciadas', () async {
-      await startAssistance();
-      factory.last.serverSend({'type': 'clear'});
-      factory.last.serverSend(detection(announce: false));
-      await flush();
+    test('solo guarda las detecciones anunciadas', () {
+      startAssistance();
+      state.applyDetection(detection(clear: true));
+      state.applyDetection(detection(announce: false));
       expect(state.history, isEmpty);
 
-      factory.last.serverSend(detection(announce: true));
-      await flush();
+      state.applyDetection(detection(announce: true));
       expect(state.history, hasLength(1));
     });
 
-    test('respeta el tope de 100 entradas', () async {
-      await startAssistance();
+    test('respeta el tope de entradas', () {
+      startAssistance();
       for (var i = 0; i < 110; i++) {
-        factory.last.serverSend(
-            detection(label: 'Obj $i', announce: true, description: 'Obj $i'));
+        state.applyDetection(
+            detection(label: 'obj $i', announce: true, description: 'Obj $i'));
       }
-      await flush(20);
       expect(state.history, hasLength(AppState.maxHistoryEntries));
-      expect(state.history.first.label, 'Obj 109');
+      expect(state.history.first.label, 'obj 109');
     });
   });
 
-  group('conexión', () {
-    test('cierre del servidor: avisa una vez y reconecta con backoff', () async {
-      await startAssistance();
-      await factory.last.incoming.close();
-      await flush();
-
-      expect(state.connectionStatus, ServerConnectionStatus.reconnecting);
-      expect(state.isConnected, isFalse);
-      expect(tts.alerts.map((c) => c.text).single,
-          contains('Sin conexión con el servidor'));
-
-      // Primer reintento a 1 s: vuelve a conectar y anuncia la recuperación.
-      await Future<void>.delayed(const Duration(milliseconds: 1100));
-      await flush();
-      expect(factory.created, hasLength(2));
-      expect(state.connectionStatus, ServerConnectionStatus.connected);
-      expect(tts.texts.last, 'Conexión recuperada.');
-      expect(tts.alerts, hasLength(1));
+  group('estado visible', () {
+    test('titular con objeto, distancia y posición', () {
+      startAssistance();
+      state.applyDetection(
+          detection(label: 'persona', distancia: 'muy_cerca', pos: 'centro'));
+      expect(state.statusHeadline, 'Persona muy cerca · centro');
+      expect(state.statusRisk, 'Medio');
     });
 
-    test('watchdog: frames sin respuesta en 5 s pasan a reconectando',
-        () async {
-      await startAssistance();
-      expect(await state.sendFrameBytes([1, 2, 3]), isTrue);
-
-      state.checkWatchdog(DateTime.now().add(const Duration(seconds: 2)));
-      expect(state.connectionStatus, ServerConnectionStatus.connected);
-
-      state.checkWatchdog(DateTime.now().add(const Duration(seconds: 6)));
-      expect(state.connectionStatus, ServerConnectionStatus.reconnecting);
-      state.checkWatchdog(DateTime.now().add(const Duration(seconds: 12)));
-      expect(tts.alerts, hasLength(1), reason: 'se anuncia una sola vez');
+    test('al entrar a la pantalla principal se abre la pestaña Inicio', () {
+      state.setTab(1);
+      state.navigateToScreen(AppScreen.mainLayout);
+      expect(state.currentTab, 0);
     });
 
-    test('no se acumulan frames: se espera la respuesta del anterior',
-        () async {
-      await startAssistance();
-      expect(await state.sendFrameBytes([1]), isTrue);
-      expect(state.canStreamFrames, isFalse);
-      expect(await state.sendFrameBytes([2]), isFalse);
-      factory.last.serverSend({'type': 'clear'});
-      await flush();
-      expect(state.canStreamFrames, isTrue);
-      expect(await state.sendFrameBytes([3]), isTrue);
-      expect(factory.last.fakeSink.sent, [
-        [1],
-        [3]
-      ]);
+    test('sin nombre el saludo es genérico', () {
+      expect(state.userName, isEmpty);
+      expect(state.greeting, 'Hola.');
+      state.updateUserName('  Ana ');
+      expect(state.greeting, 'Hola, Ana.');
     });
-
-    test('una respuesta del servidor reinicia el watchdog', () async {
-      await startAssistance();
-      await state.sendFrameBytes([1]);
-      factory.last.serverSend({'type': 'clear'});
-      await flush();
-      state.checkWatchdog(DateTime.now().add(const Duration(seconds: 6)));
-      expect(state.connectionStatus, ServerConnectionStatus.connected);
-    });
-
-    test('Detener durante el handshake no deja una conexión viva', () async {
-      factory.autoReady = false;
-      state.toggleAssistance();
-      await flush();
-      state.toggleAssistance(); // Detener
-      factory.last.readyCompleter.complete();
-      await flush();
-
-      expect(state.assistanceState, AssistanceState.inactive);
-      expect(state.connectionStatus, ServerConnectionStatus.idle);
-      expect(factory.last.fakeSink.closed, isTrue);
-      expect(await state.sendFrameBytes([1]), isFalse);
-    });
-
-    test('backoff 1, 2, 4, 8 y máximo 10 s', () {
-      expect(
-          List.generate(6, (i) => AppState.reconnectDelayFor(i).inSeconds),
-          [1, 2, 4, 8, 10, 10]);
-    });
-  });
-
-  test('parser: announce_voice por defecto false salvo riesgo Alto', () {
-    final medio = VisionRepositoryImpl.parseMessage(
-        {'type': 'detection', 'risk': 'Medio'},
-        id: '1');
-    final alto = VisionRepositoryImpl.parseMessage(
-        {'type': 'detection', 'risk': 'Alto', 'distancia': 'inmediato'},
-        id: '2');
-    expect(medio!.announceVoice, isFalse);
-    expect(alto!.announceVoice, isTrue);
-    expect(alto.distancia, 'muy_cerca');
-    expect(VisionRepositoryImpl.parseMessage({'type': 'otro'}, id: '3'),
-        isNull);
-    expect(
-        VisionRepositoryImpl.parseMessage(
-            {'type': 'detection', 'objects': 'basura'},
-            id: '4'),
-        isNotNull);
   });
 }

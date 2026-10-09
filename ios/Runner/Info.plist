@@ -66,10 +66,8 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>Riqsi se conecta al servidor de visión de tu PC en la misma red Wi-Fi para analizar lo que ve la cámara.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Riqsi usa la cámara para detectar obstáculos y describirte el entorno.</string>
+	<string>Riqsi usa la cámara para detectar obstáculos en el propio teléfono y describirte el entorno.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Riqsi usa tu ubicación para guiarte a pie por voz hasta tu destino y decirte dónde estás.</string>
 </dict>

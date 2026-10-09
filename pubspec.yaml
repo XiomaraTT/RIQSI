@@ -1,5 +1,5 @@
 name: riqsi
-description: "A new Flutter project."
+description: "Riqsi: asistente de visión para personas ciegas con detección en el celular."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -36,14 +36,14 @@ dependencies:
   cupertino_icons: ^1.0.8
   provider: ^6.1.5+1
   flutter_tts: ^4.2.5
-  web_socket_channel: ^3.0.3
-  camera: ^0.12.0+2
   vibration: ^2.0.1
   flutter_map: ^8.3.2
   latlong2: ^0.10.1
   shared_preferences: ^2.5.6
   geolocator: ^14.0.2
   http: ^1.6.0
+  ultralytics_yolo: ^0.6.15
+  permission_handler: ^12.0.1
 
 dev_dependencies:
   flutter_test:
@@ -66,6 +66,10 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  # Modelo YOLO11n (COCO, LiteRT) empaquetado para detectar sin internet.
+  assets:
+    - assets/models/
 
   # To add assets to your application, add an assets section, like this:
   # assets:
