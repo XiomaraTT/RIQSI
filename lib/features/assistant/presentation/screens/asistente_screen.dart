@@ -17,7 +17,7 @@ class AsistenteScreen extends StatefulWidget {
 
 class _AsistenteScreenState extends State<AsistenteScreen> {
   bool _showControls = true;
-  bool _isUltraWide = true; // Por defecto: lente gran angular (0.5x)
+  bool _isUltraWide = false; // Por defecto: lente principal 1x (más nitidez y mejor detección)
 
   @override
   Widget build(BuildContext context) {

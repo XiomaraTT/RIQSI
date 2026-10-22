@@ -1,6 +1,19 @@
 // Lógica de escena en Dart puro (sin Flutter ni plugins).
 // Port de server/riqsi_logic.py: distancia por borde inferior y área, riesgo,
 // prioridad, NMS, tracker EMA + histéresis, debouncer de voz y descripción.
+//
+// Las clases válidas se cargan dinámicamente desde `assets/labels.txt`
+// (ver [SceneAnalyzer.setLabels]) y corresponden al modelo YOLO propio.
+//
+// NOTA IMPORTANTE DE ACCESIBILIDAD:
+// El modelo NO incluye clase "pared" ni "muro". Por seguridad del usuario
+// con discapacidad visual, el sistema NUNCA asume ni anuncia por voz
+// "Camino despejado", pues podría chocar contra una pared. En ausencia
+// de detecciones se muestra el estado visual neutro [noObjectsText]
+// sin emitir avisos de voz falsos.
+
+/// Texto mostrado cuando no se reconoce ningún objeto del catálogo.
+const String noObjectsText = 'Sin obstáculos detectados';
 
 /// Detección cruda del modelo, coordenadas NORMALIZADAS 0..1 (origen arriba-izquierda).
 class RawDetection {
@@ -13,7 +26,8 @@ class RawDetection {
     required this.bottom,
   });
 
-  /// Nombre COCO en inglés, p. ej. 'person', 'car', 'traffic light'.
+  /// Nombre de clase tal como lo da el modelo / `labels.txt`,
+  /// p. ej. 'Silla', 'Puerta', 'escaleras'.
   final String className;
   final double confidence;
   final double left, top, right, bottom;
@@ -32,7 +46,7 @@ class SceneObject {
     required this.advice,
   });
 
-  /// En español, p. ej. 'persona', 'auto'.
+  /// En español y en minúsculas, p. ej. 'silla', 'escaleras'.
   final String label;
 
   /// 'izquierda' | 'centro' | 'derecha'
@@ -69,7 +83,7 @@ class SceneResult {
 }
 
 // ---------------------------------------------------------------------------
-// Tablas
+// Tablas de jerarquía y clasificación
 // ---------------------------------------------------------------------------
 const Map<String, int> _riskOrder = {'Bajo': 0, 'Medio': 1, 'Alto': 2};
 const Map<String, int> _distOrder = {
@@ -81,53 +95,56 @@ const Map<String, int> _distOrder = {
 const List<String> _levels = ['lejos', 'cerca', 'muy_cerca'];
 const int _never = -(1 << 40);
 
-/// Clases COCO relevantes -> español. Lo que no esté aquí se descarta.
-const Map<String, String> _translations = {
-  'person': 'persona',
-  'bicycle': 'bicicleta',
-  'car': 'auto',
-  'motorcycle': 'moto',
-  'bus': 'autobús',
-  'truck': 'camión',
-  'train': 'tren',
-  'boat': 'bote',
-  'traffic light': 'semáforo',
-  'fire hydrant': 'grifo',
-  'stop sign': 'señal de pare',
-  'parking meter': 'parquímetro',
-  'bench': 'banca',
-  'bird': 'ave',
-  'cat': 'gato',
-  'dog': 'perro',
-  'horse': 'caballo',
-  'sheep': 'oveja',
-  'cow': 'vaca',
-  'backpack': 'mochila',
-  'umbrella': 'paraguas',
-  'handbag': 'bolso',
-  'suitcase': 'maleta',
-  'chair': 'silla',
-  'couch': 'sillón',
-  'potted plant': 'planta',
-  'bed': 'cama',
-  'dining table': 'mesa',
-  'tv': 'pantalla',
-  'laptop': 'computadora portátil',
-  'refrigerator': 'refrigerador',
-  'sink': 'lavamanos',
+/// Clases que representan peligro físico de caída o desnivel.
+const Set<String> _highRiskKeys = {'escaleras'};
+
+/// Obstáculos físicos en el camino peatonal.
+const Set<String> _obstacleKeys = {'barandas', 'mesa', 'puerta', 'silla', 'persona'};
+
+/// Umbrales de confianza mínimos por clase para prevenir falsos positivos.
+/// Se toma el máximo entre este valor y el umbral global.
+const Map<String, double> _classMinConfidence = {
+  // Peligros: umbral equilibrado
+  'escaleras': 0.55,
+  'barandas': 0.50,
+  'puerta': 0.45,
+  'silla': 0.40,
+  'persona': 0.30,
+  'mochila': 0.35,
+  // Clases pequeñas o con pocos ejemplos: protegidas contra falsas alarmas
+  'mesa': 0.60,
+  'laptop': 0.65,
+  'lentes': 0.70,
+  'llave': 0.80,
+  'billete': 0.80,
 };
 
-const Map<String, String> _aliases = {'motorbike': 'motorcycle'};
+/// Fotogramas de confirmación por clase (las personas se anuncian más rápido).
+const Map<String, int> _classConfirmFrames = {'persona': 2};
+
+/// Confianza mínima requerida para escalar a riesgo 'Alto' (alerta prioritaria).
+const double _highRiskMinConfidence = 0.65;
+
+/// Área mínima de la caja (fracción del cuadro) para descartar ruido diminuto.
+const double _minBoxArea = 0.003;
+
+/// Área máxima de la caja para descartar falsas detecciones por cámara tapada.
+const double _maxBoxArea = 0.92;
+
+/// Variantes de nombres para normalización.
+const Map<String, String> _aliases = {
+  'escalera': 'escaleras',
+  'baranda': 'barandas',
+};
 
 const Map<String, String> _pluralOverrides = {
   'autobús': 'autobuses',
   'paraguas': 'paraguas',
   'lavamanos': 'lavamanos',
   'computadora portátil': 'computadoras portátiles',
+  'laptop': 'laptops',
+  'carnet': 'carnets',
 };
-
-const Set<String> _vehicleKeys = {'car', 'bus', 'truck', 'motorcycle', 'train'};
-const Set<String> _nonObstructive = {'traffic light', 'stop sign', 'parking meter'};
 
 String _normalize(String c) {
   final clean = c.toLowerCase().trim().replaceAll('_', ' ');
@@ -144,7 +161,7 @@ String _pluralWord(String w) {
   return '${w}es';
 }
 
-/// Plural en español de un nombre (puede ser compuesto: 'señal de pare').
+/// Plural en español de un nombre (admite compuestos).
 String pluralizeEs(String name) {
   name = name.toLowerCase().trim();
   if (_pluralOverrides.containsKey(name)) return _pluralOverrides[name]!;
@@ -236,6 +253,7 @@ class _Track {
   int? level;
   String? pos;
   int missed = 0;
+  int hits = 1;
 }
 
 class _Item {
@@ -256,23 +274,86 @@ String _cap(String s) => s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
 
 String _where(String pos) => pos == 'centro' ? 'al centro' : 'a la $pos';
 
-/// Estado por sesión (tracker EMA + histéresis + debouncer).
+/// Analizador de escena en tiempo real con filtro de falsas alarmas,
+/// histéresis espacial y debouncer de voz.
 class SceneAnalyzer {
-  SceneAnalyzer({double minConfidence = 0.35}) : _minConf = minConfidence;
+  SceneAnalyzer({
+    double minConfidence = defaultMinConfidence,
+    double nmsIou = defaultNmsIou,
+    Iterable<String>? labels,
+    int confirmFrames = defaultConfirmFrames,
+  })  : _minConf = minConfidence,
+        _nmsIou = nmsIou,
+        _confirmFrames = confirmFrames < 1 ? 1 : confirmFrames {
+    if (labels != null) setLabels(labels);
+  }
 
-  final double _minConf;
+  /// Confianza mínima por defecto.
+  static const double defaultMinConfidence = 0.25;
+
+  /// IoU de NMS por clase.
+  static const double defaultNmsIou = 0.45;
+
+  /// Fotogramas consecutivos necesarios para confirmar un objeto nuevo.
+  /// 1 permite respuesta instantánea al enfocar un obstáculo.
+  static const int defaultConfirmFrames = 3;
+
+  double _minConf;
+  final double _nmsIou;
+  final int _confirmFrames;
+
+  /// Clases conocidas (normalizadas), cargadas desde `labels.txt`.
+  Set<String> _known = {};
 
   static const double _emaAlpha = 0.5;
   static const double _matchIou = 0.3;
   static const int _maxMissed = 5;
-  static const int _altoCooldown = 2500;
-  static const int _changeCooldown = 3800;
+
+  /// Cooldown entre avisos repetidos del mismo peligro Alto (2.0 s).
+  static const int _altoCooldown = 2000;
+
+  /// Cooldown mínimo al cambiar la escena antes de nuevo aviso por voz (1.2 s).
+  static const int _changeCooldown = 1800;
+
+  /// Intervalo máximo para refrescar la descripción si la escena sigue igual (6.5 s).
   static const int _repeatCooldown = 6500;
 
   List<_Track> _tracks = [];
   Set<String> _lastSig = {};
   int _lastTime = _never;
   final Map<String, int> _altoLast = {};
+
+  /// Confianza mínima actual (ajustable según la sensibilidad del usuario).
+  double get minConfidence => _minConf;
+  set minConfidence(double value) => _minConf = value.clamp(0.0, 1.0);
+
+  /// Clases que acepta el analizador, normalizadas.
+  Set<String> get labels => Set.unmodifiable(_known);
+
+  /// Define las clases válidas. Con conjunto vacío acepta cualquier clase.
+  void setLabels(Iterable<String> labels) {
+    _known = labels.map(_normalize).where((l) => l.isNotEmpty).toSet();
+  }
+
+  bool _accepts(String key) => _known.isEmpty || _known.contains(key);
+
+  /// Filtro estricto de entrada para descartar detecciones espurias y ruido.
+  bool _passesFilters(RawDetection d) {
+    final key = _normalize(d.className);
+    if (!_accepts(key)) return false;
+
+    // Umbral de clase específico vs umbral general
+    final classMin = _classMinConfidence[key];
+    final needed = classMin != null && classMin > _minConf ? classMin : _minConf;
+    if (d.confidence < needed) return false;
+
+    // Validación de dimensiones y área de la caja
+    final w = d.right - d.left;
+    final h = d.bottom - d.top;
+    if (w <= 0 || h <= 0) return false;
+    final area = w * h;
+    return area >= _minBoxArea && area <= _maxBoxArea;
+  }
 
   void reset() {
     _tracks = [];
@@ -282,16 +363,13 @@ class SceneAnalyzer {
   }
 
   SceneResult analyse(List<RawDetection> detections, {required int nowMs}) {
-    final dets = _nms(
-      detections
-          .where((d) =>
-              d.confidence >= _minConf &&
-              _translations.containsKey(_normalize(d.className)))
-          .toList(),
-      0.5,
-    );
+    // 1. Filtrado de ruido y confianza mínima
+    final validDets = detections.where(_passesFilters).toList();
 
-    // Emparejar con tracks (misma clase + IoU).
+    // 2. NMS (supresión de no-máximos)
+    final dets = _nms(validDets, _nmsIou);
+
+    // 3. Emparejar con tracks existentes (misma clase + IoU suficiente)
     final pairs = <List<num>>[];
     for (var i = 0; i < dets.length; i++) {
       final key = _normalize(dets[i].className);
@@ -327,14 +405,24 @@ class SceneAnalyzer {
         t = _Track(_normalize(d.className), b, area, bottom, xc);
         newTracks.add(t);
       } else {
+        // Suavizado EMA de posición y dimensiones
         t.area = _emaAlpha * area + (1 - _emaAlpha) * t.area;
         t.bottom = _emaAlpha * bottom + (1 - _emaAlpha) * t.bottom;
         t.xc = _emaAlpha * xc + (1 - _emaAlpha) * t.xc;
         t.box = b;
         t.missed = 0;
+        t.hits++;
       }
+
+      // Confirmación temporal: descartar objetos de 1 solo cuadro para evitar falsas alarmas
+      final need = _confirmFrames < (_classConfirmFrames[t.key] ?? _confirmFrames)
+          ? _confirmFrames
+          : (_classConfirmFrames[t.key] ?? _confirmFrames);
+      if (t.hits < need) continue;
+
       items.add(_classify(d, t));
     }
+
     final matchedIds = matches.values.toSet();
     for (final t in _tracks) {
       if (!matchedIds.contains(t)) t.missed++;
@@ -343,22 +431,24 @@ class SceneAnalyzer {
 
     items.sort(_cmpPriority);
     final objs = items.map((e) => e.obj).toList();
+
     if (items.isEmpty) {
       return SceneResult(
         objects: const [],
         top: null,
-        description: 'Camino despejado',
+        description: noObjectsText,
         risk: 'Bajo',
         distancia: 'despejado',
         announce: _announceClear(nowMs),
       );
     }
+
     final top = objs.first;
     return SceneResult(
       objects: objs,
       top: top,
       description: _describe(items),
-      risk: top.risk, // el top ya es el de mayor riesgo
+      risk: top.risk,
       distancia: top.distancia,
       announce: _announce(objs, nowMs),
     );
@@ -371,13 +461,20 @@ class SceneAnalyzer {
     final area = t.area, bottom = t.bottom;
     t.level = _hysteresis(t.level, (s) => _levelIndex(area, bottom, s));
     final level = _levels[t.level!];
-    final nonObs = _nonObstructive.contains(key);
+
+    final isHighRiskClass = _highRiskKeys.contains(key);
+    // Solo eleva a riesgo 'Alto' si la confianza de detección supera el umbral estricto
+    final highRisk = isHighRiskClass && d.confidence >= _highRiskMinConfidence;
+    final isObstacle = _obstacleKeys.contains(key);
+    final nonObs = !isHighRiskClass && !isObstacle;
 
     String advice;
-    if (area > 0.60) {
-      advice = 'Paso bloqueado. Detente';
-    } else if (nonObs) {
+    if (nonObs) {
       advice = '';
+    } else if (isHighRiskClass && level != 'lejos') {
+      advice = 'Detente y avanza con cuidado';
+    } else if (area > 0.60) {
+      advice = 'Paso bloqueado. Detente';
     } else if (pos == 'centro') {
       advice = t.xc <= 0.50 ? 'Desvíate a la derecha' : 'Desvíate a la izquierda';
     } else if (pos == 'izquierda') {
@@ -391,10 +488,10 @@ class SceneAnalyzer {
       risk = 'Bajo';
       distancia = level == 'lejos' ? 'lejos' : 'cerca';
     } else if (level == 'muy_cerca') {
-      risk = _vehicleKeys.contains(key) ? 'Alto' : 'Medio';
+      risk = highRisk ? 'Alto' : 'Medio';
       distancia = 'muy_cerca';
     } else if (level == 'cerca') {
-      risk = 'Medio';
+      risk = highRisk ? 'Alto' : 'Medio';
       distancia = 'cerca';
     } else {
       risk = 'Bajo';
@@ -404,7 +501,7 @@ class SceneAnalyzer {
     final b = _box(d);
     return _Item(
       SceneObject(
-        label: _translations[key]!,
+        label: key,
         pos: pos,
         risk: risk,
         distancia: distancia,
@@ -418,7 +515,7 @@ class SceneAnalyzer {
     );
   }
 
-  // ---- Descripción ----
+  // ---- Descripción hablada ----
   String _describe(List<_Item> ordered) {
     final top = ordered.first.obj;
     if (top.risk == 'Alto' || top.risk == 'Medio') {
@@ -428,7 +525,8 @@ class SceneAnalyzer {
       final head = '$lab $dist ${_where(top.pos)}.';
       return top.risk == 'Alto' ? '¡Cuidado! $head$adv' : '$head$adv';
     }
-    // Todo Bajo: resumen agrupado por posición.
+
+    // Objetos de riesgo Bajo: resumen agrupado por posición sin tono de alerta
     final byPos = <String, List<String>>{
       'centro': [],
       'derecha': [],
@@ -462,14 +560,13 @@ class SceneAnalyzer {
     return '${items.sublist(0, items.length - 1).join(', ')} y ${items.last}';
   }
 
-  // ---- Debouncer ----
+  // ---- Debouncer de voz ----
+
+  /// En ausencia de objetos, NUNCA se emite aviso de voz porque el modelo
+  /// no detecta paredes y decir "camino despejado" sería engañoso.
   bool _announceClear(int now) {
-    // Solo se anuncia al pasar de "algo" a "nada"; no se repite.
-    if (_lastSig.isEmpty) return false;
-    if (now - _lastTime > _changeCooldown) {
+    if (_lastSig.isNotEmpty && now - _lastTime > _changeCooldown) {
       _lastSig = {};
-      _lastTime = now;
-      return true;
     }
     return false;
   }

@@ -6,13 +6,13 @@ Riqsi es un asistente inteligente de visión del entorno para personas con disca
 
 ## ⚙️ Cómo funciona ahora
 
-Toda la detección corre **dentro del celular**, sin PC, sin servidor y sin Wi-Fi. La app incluye el modelo **YOLO11n (COCO)** y lo ejecuta con el plugin oficial [`ultralytics_yolo`](https://pub.dev/packages/ultralytics_yolo). Solo el mapa y las rutas necesitan internet.
+Toda la detección corre **dentro del celular**, sin PC, sin servidor y sin Wi-Fi. La app incluye un modelo **YOLOv8 propio de 20 clases de interiores** (`assets/models/best.tflite`, clases en `assets/labels.txt`: escaleras, puertas, sillas, mesas, barandas y objetos como llaves, billetes o tazas) y lo ejecuta con el plugin oficial [`ultralytics_yolo`](https://pub.dev/packages/ultralytics_yolo). Solo el mapa y las rutas necesitan internet.
 
 ```
   Cámara del celular
          │
          ▼
-  YOLO11n en el teléfono (ultralytics_yolo, sin internet)
+  YOLOv8 propio en el teléfono (best.tflite, ultralytics_yolo, sin internet)
          │  objetos + posición + distancia estimada
          ▼
   Voz en español (TTS)  +  Vibración según la distancia
@@ -68,7 +68,9 @@ Riqsi está pensada para usarse con **TalkBack** (Android) activado: los botones
 
 * La **distancia es estimada** y no está calibrada: úsala como referencia, no como medida exacta.
 * Necesita **buena luz**; con poca luz o la cámara tapada la detección falla.
-* **Postes y conos** dependen del modelo especializado `best.pt`, que **hay que reentrenar**: actualmente tiene 15 clases de basura y no detecta bien esos obstáculos. La app usa por ahora YOLO11n COCO.
+* **El modelo no tiene clase "pared"**: por eso la app nunca dice "camino despejado". Si no ve nada conocido dice "No detecto objetos conocidos" (sin voz), porque una pared o un muro no se detectan. Para evitar falsas alarmas un objeto debe verse en 3 cuadros seguidos, cada clase tiene su confianza mínima (escaleras 0.60, alerta Alto solo desde 0.65) y se ignoran cajas diminutas o que cubren toda la imagen.
+* El modelo propio (`best.tflite`) **solo se usa en Android**. En iOS la app sigue usando YOLO11n COCO hasta exportar `best.pt` a Core ML (`yolo export model=best.pt format=coreml`) y cambiar `riqsiModelPath`.
+* Para cambiar de modelo: reemplaza `assets/models/best.tflite` y `assets/labels.txt` (una clase por línea, en el orden del modelo). El riesgo de cada clase se define en `scene_logic.dart` (`_highRiskKeys`, `_obstacleKeys`); el resto se anuncia como objeto.
 * El **mapa y las rutas necesitan datos/internet**, y la precisión depende del GPS y de la cobertura de OpenStreetMap.
 * No reemplaza al bastón ni a otras ayudas de movilidad.
 

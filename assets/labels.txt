@@ -1,0 +1,11 @@
+Barandas
+Billete
+LLave
+Laptop
+Lentes
+Mesa
+Mochila
+Persona
+Puerta
+Silla
+escaleras

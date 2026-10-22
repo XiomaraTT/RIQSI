@@ -67,9 +67,11 @@ flutter:
   # the material Icons class.
   uses-material-design: true
 
-  # Modelo YOLO11n (COCO, LiteRT) empaquetado para detectar sin internet.
+  # Modelo propio YOLOv8 (20 clases de interiores, LiteRT NCHW [1,3,640,640]
+  # -> [1,24,8400]) empaquetado para detectar sin internet, y sus etiquetas.
   assets:
     - assets/models/
+    - assets/labels.txt
 
   # To add assets to your application, add an assets section, like this:
   # assets:

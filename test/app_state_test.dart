@@ -154,7 +154,7 @@ void main() {
       state.onRawDetections(const []);
       expect(vibration.proximity.last, 'despejado');
       expect(state.assistanceState, AssistanceState.analyzing);
-      expect(state.statusHeadline, 'Camino despejado');
+      expect(state.statusHeadline, noObjectsText);
     });
 
     test('iniciar reinicia el analizador; detener para la vibración', () {

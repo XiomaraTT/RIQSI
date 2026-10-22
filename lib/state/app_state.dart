@@ -18,6 +18,7 @@ import '../features/history/domain/repositories/history_repository.dart';
 import '../features/settings/domain/repositories/settings_repository.dart';
 
 // Data Layers
+import '../features/assistant/data/datasources/labels_datasource.dart';
 import '../features/assistant/data/repositories/tts_repository_impl.dart';
 import '../features/assistant/data/repositories/vibration_repository_impl.dart';
 import '../features/history/data/repositories/history_repository_impl.dart';
@@ -72,6 +73,7 @@ class AppState extends ChangeNotifier {
   late final SettingsRepository _settingsRepository;
   late final NavigationRepositoryImpl _navigationRepository;
   late final SceneAnalyzer _sceneAnalyzer;
+  late final Future<List<String>> Function() _labelsLoader;
   late final int Function() _nowMs;
 
   // Use case references
@@ -126,6 +128,19 @@ class AppState extends ChangeNotifier {
   bool get vibrationEnabled => _settings?.vibrationEnabled ?? true;
   String get alertFrequency => _settings?.alertFrequency ?? 'Alta';
   String get sensitivity => _settings?.sensitivity ?? 'Alta';
+
+  /// Confianza mínima de detección según la sensibilidad elegida. Se usa
+  /// tanto en el modelo (plugin) como en el analizador de escena.
+  double get detectionThreshold {
+    switch (sensitivity) {
+      case '90%':
+        return 0.25;
+      case '50%':
+        return 0.40;
+      default:
+        return SceneAnalyzer.defaultMinConfidence; // 0.25
+    }
+  }
   String get language => _settings?.language ?? 'Español';
   String get userName => _settings?.userName ?? '';
   bool get hasUserName => userName.trim().isNotEmpty;
@@ -150,7 +165,7 @@ class AppState extends ChangeNotifier {
   String get statusHeadline {
     if (!isAssisting) return "Asistencia detenida";
     final d = activeDetection;
-    if (d == null) return "Camino despejado";
+    if (d == null) return noObjectsText;
     return headlineFor(d);
   }
 
@@ -186,6 +201,7 @@ class AppState extends ChangeNotifier {
     SettingsRepository? settingsRepository,
     NavigationRepositoryImpl? navigationRepository,
     SceneAnalyzer? sceneAnalyzer,
+    Future<List<String>> Function()? labelsLoader,
     int Function()? clockMs,
     Duration splashDuration = const Duration(seconds: 3),
   }) {
@@ -196,6 +212,7 @@ class AppState extends ChangeNotifier {
     _settingsRepository = settingsRepository ?? SettingsRepositoryImpl();
     _navigationRepository = navigationRepository ?? NavigationRepositoryImpl();
     _sceneAnalyzer = sceneAnalyzer ?? SceneAnalyzer();
+    _labelsLoader = labelsLoader ?? loadModelLabels;
     _nowMs = clockMs ?? () => _clock.elapsedMilliseconds;
 
     _speakText = SpeakText(_ttsRepository);
@@ -232,6 +249,13 @@ class AppState extends ChangeNotifier {
         ..addAll(stored.where((e) => !e.isClear).take(maxHistoryEntries));
     } catch (e) {
       debugPrint('[APP] Error cargando datos locales: $e');
+    }
+    // Clases del modelo desde assets/labels.txt (sin lista en duro).
+    try {
+      final labels = await _labelsLoader();
+      if (labels.isNotEmpty) _sceneAnalyzer.setLabels(labels);
+    } catch (e) {
+      debugPrint('[APP] Error cargando etiquetas del modelo: $e');
     }
     notifyListeners();
   }
@@ -395,6 +419,7 @@ class AppState extends ChangeNotifier {
 
     final SceneResult result;
     try {
+      _sceneAnalyzer.minConfidence = detectionThreshold;
       result = _sceneAnalyzer.analyse(detections, nowMs: now);
     } catch (e) {
       debugPrint("[APP] Error analizando la escena: $e");

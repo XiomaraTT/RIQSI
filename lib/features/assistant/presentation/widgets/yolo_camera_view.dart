@@ -14,7 +14,7 @@ import '../../domain/scene/scene_logic.dart';
 /// - iOS: paquete Core ML oficial, se descarga y cachea en el primer uso.
 String get riqsiModelPath => defaultTargetPlatform == TargetPlatform.iOS
     ? 'https://github.com/ultralytics/yolo-ios-app/releases/download/v8.3.0/yolo11n.mlpackage.zip'
-    : 'assets/models/yolo11n.tflite';
+    : 'assets/models/riqsi_v2.tflite';
 
 /// Cámara a pantalla completa con detección YOLO en el propio celular.
 ///
