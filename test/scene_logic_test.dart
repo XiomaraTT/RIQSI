@@ -16,9 +16,11 @@ Laptop
 Lentes
 Mesa
 Mochila
+PC
 Persona
 Puerta
 Silla
+Tacho
 escaleras
 ''';
 
@@ -33,14 +35,16 @@ SceneResult run(List<RawDetection> d, {SceneAnalyzer? a, int t = 0}) =>
 
 void main() {
   test('labels.txt se lee sin lineas vacias ni CRLF', () {
-    expect(labels.length, 11);
+    expect(labels.length, 13);
     expect(labels.first, 'Barandas');
     expect(labels.last, 'escaleras');
     expect(labels, contains('Persona'));
+    expect(labels, contains('PC'));
+    expect(labels, contains('Tacho'));
     expect(parseLabels('\n  Silla \r\n\r\nMesa\n'), ['Silla', 'Mesa']);
   });
 
-  test('el archivo real assets/labels.txt tiene 11 clases', () async {
+  test('el archivo real assets/labels.txt tiene 13 clases', () async {
     TestWidgetsFlutterBinding.ensureInitialized();
     final loaded = await loadModelLabels();
     expect(loaded, labels);
@@ -83,12 +87,16 @@ void main() {
     expect(r.description, startsWith('¡Cuidado! Escaleras muy cerca'));
     expect(r.description, contains('Detente'));
 
-    for (final c in ['Silla', 'Mesa', 'Puerta', 'Barandas', 'Persona']) {
+    for (final c in ['Silla', 'Mesa', 'Puerta', 'Barandas', 'Persona', 'Tacho']) {
       expect(run([det(c, big, 0.8)]).top!.risk, 'Medio');
     }
     final obj = run([det('Lentes', big, 0.8)]).top!;
     expect(obj.risk, 'Bajo');
     expect(obj.advice, '');
+
+    final pc = run([det('PC', big, 0.8)]).top!;
+    expect(pc.risk, 'Bajo');
+    expect(pc.advice, '');
   });
 
   test('NMS elimina duplicado de la misma clase (IoU 0.40)', () {
@@ -163,11 +171,30 @@ void main() {
     expect(pluralizeEs('llave'), 'llaves');
     expect(pluralizeEs('laptop'), 'laptops');
     expect(pluralizeEs('escaleras'), 'escaleras');
+    expect(pluralizeEs('pc'), 'computadoras');
+    expect(pluralizeEs('tacho'), 'tachos');
     final r = run([
       det('Silla', [0.02, 0.4, 0.1, 0.5], 0.8),
       det('Silla', [0.15, 0.4, 0.23, 0.5], 0.8)
     ]);
     expect(r.description, contains('2 sillas'));
+
+    final rPc = run([
+      det('PC', [0.02, 0.4, 0.1, 0.5], 0.8),
+      det('PC', [0.15, 0.4, 0.23, 0.5], 0.8)
+    ]);
+    expect(rPc.description, contains('2 computadoras'));
+  });
+
+  test('resolucion de clase por indice numerico', () {
+    // Clase 7 es PC, clase 11 es Tacho, clase 8 es Persona
+    final r = run([det('11', big, 0.8)]);
+    expect(r.top!.label, 'tacho');
+    expect(r.top!.risk, 'Medio');
+
+    final rPc = run([det('7', small, 0.8)]);
+    expect(rPc.top!.label, 'pc');
+    expect(rPc.top!.risk, 'Bajo');
   });
 
   test('objeto pequeno sin consejo', () {

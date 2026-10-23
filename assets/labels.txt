@@ -5,7 +5,9 @@ Laptop
 Lentes
 Mesa
 Mochila
+PC
 Persona
 Puerta
 Silla
+Tacho
 escaleras

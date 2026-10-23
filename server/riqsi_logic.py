@@ -43,9 +43,16 @@ TRANSLATIONS = {
     "chair": "silla", "couch": "sillón", "bed": "cama", "dining_table": "mesa",
     "tv": "pantalla", "laptop": "computadora portátil", "refrigerator": "refrigerador",
     "potted_plant": "planta", "sink": "lavamanos",
+    "pc": "computadora", "tacho": "tacho", "barandas": "barandas",
+    "llave": "llave", "billete": "billete", "lentes": "lentes",
 }
 
-ALIASES = {"motorbike": "motorcycle", "potholes": "pothole"}
+ALIASES = {
+    "motorbike": "motorcycle", "potholes": "pothole",
+    "computadora": "pc", "ordenador": "pc",
+    "tachos": "tacho", "papelera": "tacho", "basurero": "tacho",
+    "baranda": "barandas", "escalera": "escaleras",
+}
 
 # Plurales irregulares o que las reglas no resuelven bien.
 PLURAL_OVERRIDES = {
@@ -55,12 +62,18 @@ PLURAL_OVERRIDES = {
     "lavamanos": "lavamanos",
     "computadora portátil": "computadoras portátiles",
     "tacho de basura": "tachos de basura",
+    "tacho": "tachos",
+    "pc": "computadoras",
+    "computadora": "computadoras",
 }
 
 HOLE_KEYS = {"hueco", "desnivel", "pothole", "hole"}
 VEHICLE_KEYS = {"car", "bus", "truck", "motorcycle", "tricycle"}
 # Objetos que informan pero no estorban el paso: no se da consejo de esquive.
-NON_OBSTRUCTIVE_KEYS = {"traffic_light", "stop_sign", "traffic_sign", "sign", "crosswalk"}
+NON_OBSTRUCTIVE_KEYS = {
+    "traffic_light", "stop_sign", "traffic_sign", "sign", "crosswalk",
+    "pc", "laptop", "llave", "billete", "lentes", "backpack", "mochila",
+}
 
 
 def normalize_label(label: str) -> str:

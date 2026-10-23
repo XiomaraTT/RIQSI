@@ -107,8 +107,8 @@ class YoloDetector:
             print(f"[INFO] Cargando modelo universal COCO (80 clases): {coco}", flush=True)
             self.models.append((YOLO(str(coco), task="detect"), "coco"))
 
-        # 2. Modelo de obstáculos peatonales especializados (postes, bolardos, conos)
-        for name in ("best.pt", "best.onnx"):
+        # 2. Modelo de obstáculos propio (13 clases de interiores y vía pública)
+        for name in ("best.pt", "best.onnx", "best.tflite"):
             custom = ROOT / name
             if custom.exists():
                 print(f"[INFO] Cargando modelo especializado: {custom}", flush=True)

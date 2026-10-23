@@ -99,7 +99,7 @@ const int _never = -(1 << 40);
 const Set<String> _highRiskKeys = {'escaleras'};
 
 /// Obstáculos físicos en el camino peatonal.
-const Set<String> _obstacleKeys = {'barandas', 'mesa', 'puerta', 'silla', 'persona'};
+const Set<String> _obstacleKeys = {'barandas', 'mesa', 'puerta', 'silla', 'persona', 'tacho'};
 
 /// Umbrales de confianza mínimos por clase para prevenir falsos positivos.
 /// Se toma el máximo entre este valor y el umbral global.
@@ -111,7 +111,9 @@ const Map<String, double> _classMinConfidence = {
   'silla': 0.40,
   'persona': 0.30,
   'mochila': 0.35,
-  // Clases pequeñas o con pocos ejemplos: protegidas contra falsas alarmas
+  'tacho': 0.45,
+  // Clases de escritorio / objetos personales: protegidas contra falsas alarmas
+  'pc': 0.60,
   'mesa': 0.60,
   'laptop': 0.65,
   'lentes': 0.70,
@@ -135,6 +137,11 @@ const double _maxBoxArea = 0.92;
 const Map<String, String> _aliases = {
   'escalera': 'escaleras',
   'baranda': 'barandas',
+  'tachos': 'tacho',
+  'papelera': 'tacho',
+  'basurero': 'tacho',
+  'computadora': 'pc',
+  'ordenador': 'pc',
 };
 
 const Map<String, String> _pluralOverrides = {
@@ -144,6 +151,8 @@ const Map<String, String> _pluralOverrides = {
   'computadora portátil': 'computadoras portátiles',
   'laptop': 'laptops',
   'carnet': 'carnets',
+  'pc': 'computadoras',
+  'tacho': 'tachos',
 };
 
 String _normalize(String c) {
@@ -177,6 +186,13 @@ String pluralizeEs(String name) {
   return _pluralWord(name);
 }
 
+/// Nombre natural hablado para síntesis de voz (TTS).
+String _spokenLabel(String label) {
+  final clean = label.toLowerCase().trim();
+  if (clean == 'pc') return 'computadora';
+  return clean;
+}
+
 // ---------------------------------------------------------------------------
 // Geometría / NMS
 // ---------------------------------------------------------------------------
@@ -198,13 +214,13 @@ double _iou(List<double> a, List<double> b) {
 
 List<double> _box(RawDetection d) => [d.left, d.top, d.right, d.bottom];
 
-List<RawDetection> _nms(List<RawDetection> dets, double thr) {
+List<RawDetection> _nms(List<RawDetection> dets, double thr, [String Function(String)? resolveClass]) {
   final ordered = [...dets]..sort((a, b) => b.confidence.compareTo(a.confidence));
   final kept = <RawDetection>[];
   for (final d in ordered) {
-    final key = _normalize(d.className);
+    final key = resolveClass != null ? resolveClass(d.className) : _normalize(d.className);
     final dup = kept.any(
-        (k) => _normalize(k.className) == key && _iou(_box(k), _box(d)) > thr);
+        (k) => (resolveClass != null ? resolveClass(k.className) : _normalize(k.className)) == key && _iou(_box(k), _box(d)) > thr);
     if (!dup) kept.add(d);
   }
   return kept;
@@ -302,6 +318,9 @@ class SceneAnalyzer {
   final double _nmsIou;
   final int _confirmFrames;
 
+  /// Lista ordenada de clases (para mapear por índice si el modelo emite enteros).
+  List<String> _labelsList = [];
+
   /// Clases conocidas (normalizadas), cargadas desde `labels.txt`.
   Set<String> _known = {};
 
@@ -332,14 +351,25 @@ class SceneAnalyzer {
 
   /// Define las clases válidas. Con conjunto vacío acepta cualquier clase.
   void setLabels(Iterable<String> labels) {
-    _known = labels.map(_normalize).where((l) => l.isNotEmpty).toSet();
+    _labelsList = labels.map(_normalize).where((l) => l.isNotEmpty).toList();
+    _known = _labelsList.toSet();
+  }
+
+  /// Resuelve la clase a partir del nombre o de su índice entero de salida.
+  String _resolveClassName(String raw) {
+    final trimmed = raw.trim();
+    final idx = int.tryParse(trimmed);
+    if (idx != null && idx >= 0 && idx < _labelsList.length) {
+      return _labelsList[idx];
+    }
+    return _normalize(trimmed);
   }
 
   bool _accepts(String key) => _known.isEmpty || _known.contains(key);
 
   /// Filtro estricto de entrada para descartar detecciones espurias y ruido.
   bool _passesFilters(RawDetection d) {
-    final key = _normalize(d.className);
+    final key = _resolveClassName(d.className);
     if (!_accepts(key)) return false;
 
     // Umbral de clase específico vs umbral general
@@ -367,12 +397,12 @@ class SceneAnalyzer {
     final validDets = detections.where(_passesFilters).toList();
 
     // 2. NMS (supresión de no-máximos)
-    final dets = _nms(validDets, _nmsIou);
+    final dets = _nms(validDets, _nmsIou, _resolveClassName);
 
     // 3. Emparejar con tracks existentes (misma clase + IoU suficiente)
     final pairs = <List<num>>[];
     for (var i = 0; i < dets.length; i++) {
-      final key = _normalize(dets[i].className);
+      final key = _resolveClassName(dets[i].className);
       for (var j = 0; j < _tracks.length; j++) {
         if (_tracks[j].key == key) {
           final v = _iou(_box(dets[i]), _tracks[j].box);
@@ -402,7 +432,7 @@ class SceneAnalyzer {
       final xc = (b[0] + b[2]) / 2.0;
       var t = matches[i];
       if (t == null) {
-        t = _Track(_normalize(d.className), b, area, bottom, xc);
+        t = _Track(_resolveClassName(d.className), b, area, bottom, xc);
         newTracks.add(t);
       } else {
         // Suavizado EMA de posición y dimensiones
@@ -505,10 +535,10 @@ class SceneAnalyzer {
         pos: pos,
         risk: risk,
         distancia: distancia,
-        left: b[0],
-        top: b[1],
-        right: b[2],
-        bottom: b[3],
+        left: b[0].clamp(0.0, 1.0),
+        top: b[1].clamp(0.0, 1.0),
+        right: b[2].clamp(0.0, 1.0),
+        bottom: b[3].clamp(0.0, 1.0),
         advice: advice,
       ),
       area,
@@ -519,7 +549,7 @@ class SceneAnalyzer {
   String _describe(List<_Item> ordered) {
     final top = ordered.first.obj;
     if (top.risk == 'Alto' || top.risk == 'Medio') {
-      final lab = _cap(top.label);
+      final lab = _cap(_spokenLabel(top.label));
       final dist = top.distancia == 'muy_cerca' ? 'muy cerca' : 'cerca';
       final adv = top.advice.isNotEmpty ? ' ${top.advice}.' : '';
       final head = '$lab $dist ${_where(top.pos)}.';
@@ -551,7 +581,8 @@ class SceneAnalyzer {
   String _group(List<String> labels) {
     final counts = <String, int>{};
     for (final l in labels) {
-      counts[l] = (counts[l] ?? 0) + 1;
+      final spoken = _spokenLabel(l);
+      counts[spoken] = (counts[spoken] ?? 0) + 1;
     }
     final items = counts.entries
         .map((e) => e.value > 1 ? '${e.value} ${pluralizeEs(e.key)}' : e.key)

@@ -186,9 +186,14 @@ class AppState extends ChangeNotifier {
   }
 
   static String headlineFor(DetectionEvent d) {
-    final label = d.label.isEmpty
-        ? 'Obstáculo'
-        : d.label[0].toUpperCase() + d.label.substring(1);
+    if (d.label.isEmpty) return 'Obstáculo';
+    final raw = d.label.trim();
+    final String label;
+    if (raw.toLowerCase() == 'pc') {
+      label = 'PC';
+    } else {
+      label = raw[0].toUpperCase() + raw.substring(1);
+    }
     final dist = distanceLabel(d.distancia);
     final head = dist.isEmpty ? label : '$label $dist';
     return d.relativePosition.isEmpty ? head : '$head · ${d.relativePosition}';

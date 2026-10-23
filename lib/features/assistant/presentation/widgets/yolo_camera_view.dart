@@ -8,13 +8,13 @@ import '../../../../core/theme/riqsi_theme.dart';
 import '../../../../state/app_state.dart';
 import '../../domain/scene/scene_logic.dart';
 
-/// Modelo de detección (YOLO11n, 80 clases COCO).
+/// Modelo de detección YOLOv8 propio empaquetado en la app (13 clases).
 ///
-/// - Android: empaquetado como asset (funciona sin internet).
+/// - Android: empaquetado como asset (funciona sin internet ni servidor).
 /// - iOS: paquete Core ML oficial, se descarga y cachea en el primer uso.
 String get riqsiModelPath => defaultTargetPlatform == TargetPlatform.iOS
     ? 'https://github.com/ultralytics/yolo-ios-app/releases/download/v8.3.0/yolo11n.mlpackage.zip'
-    : 'assets/models/riqsi_v2.tflite';
+    : 'assets/models/best.tflite';
 
 /// Cámara a pantalla completa con detección YOLO en el propio celular.
 ///
