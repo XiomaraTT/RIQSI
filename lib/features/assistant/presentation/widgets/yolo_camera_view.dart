@@ -139,9 +139,9 @@ class _YoloCameraViewState extends State<YoloCameraView>
       case '90%':
         return 0.25;
       case '50%':
-        return 0.5;
+        return 0.45;
       default:
-        return 0.35;
+        return 0.28;
     }
   }
 
@@ -189,7 +189,7 @@ class _YoloCameraViewState extends State<YoloCameraView>
               includeClassifications: false,
               includeProcessingTimeMs: false,
               includeFps: false,
-              maxFPS: 10,
+              maxFPS: 15,
             ),
             onResult: _onResult,
             onModelLoad: (_, _) => widget.state.reportCameraReady(),

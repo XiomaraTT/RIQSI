@@ -95,8 +95,8 @@ const Map<String, int> _distOrder = {
 const List<String> _levels = ['lejos', 'cerca', 'muy_cerca'];
 const int _never = -(1 << 40);
 
-/// Clases que representan peligro físico de caída o desnivel.
-const Set<String> _highRiskKeys = {'escaleras'};
+/// Clases que representan peligro físico de caída, desnivel o descarga.
+const Set<String> _highRiskKeys = {'escaleras', 'peligro electrico'};
 
 /// Obstáculos físicos en el camino peatonal.
 const Set<String> _obstacleKeys = {'barandas', 'mesa', 'puerta', 'silla', 'persona', 'tacho'};
@@ -106,23 +106,27 @@ const Set<String> _obstacleKeys = {'barandas', 'mesa', 'puerta', 'silla', 'perso
 const Map<String, double> _classMinConfidence = {
   // Peligros: umbral equilibrado
   'escaleras': 0.55,
-  'barandas': 0.50,
-  'puerta': 0.45,
+  'peligro electrico': 0.50,
+  'barandas': 0.45,
+  'puerta': 0.40,
   'silla': 0.40,
-  'persona': 0.30,
-  'mochila': 0.35,
-  'tacho': 0.45,
+  'persona': 0.35,
+  'mochila': 0.32,
+  'tacho': 0.40,
+  'mesa': 0.48,
   // Clases de escritorio / objetos personales: protegidas contra falsas alarmas
-  'pc': 0.60,
-  'mesa': 0.60,
+  'pc': 0.55,
   'laptop': 0.65,
   'lentes': 0.70,
   'llave': 0.80,
   'billete': 0.80,
 };
 
-/// Fotogramas de confirmación por clase (las personas se anuncian más rápido).
-const Map<String, int> _classConfirmFrames = {'persona': 2};
+/// Fotogramas de confirmación por clase (persona y mochila se confirman en 2 cuadros).
+const Map<String, int> _classConfirmFrames = {
+  'persona': 2,
+  'mochila': 2,
+};
 
 /// Confianza mínima requerida para escalar a riesgo 'Alto' (alerta prioritaria).
 const double _highRiskMinConfidence = 0.65;
@@ -142,6 +146,9 @@ const Map<String, String> _aliases = {
   'basurero': 'tacho',
   'computadora': 'pc',
   'ordenador': 'pc',
+  'peligro_electrico': 'peligro electrico',
+  'riesgo electrico': 'peligro electrico',
+  'riesgo_electrico': 'peligro electrico',
 };
 
 const Map<String, String> _pluralOverrides = {
@@ -153,6 +160,7 @@ const Map<String, String> _pluralOverrides = {
   'carnet': 'carnets',
   'pc': 'computadoras',
   'tacho': 'tachos',
+  'peligro electrico': 'peligros eléctricos',
 };
 
 String _normalize(String c) {
@@ -190,6 +198,7 @@ String pluralizeEs(String name) {
 String _spokenLabel(String label) {
   final clean = label.toLowerCase().trim();
   if (clean == 'pc') return 'computadora';
+  if (clean == 'peligro electrico') return 'peligro eléctrico';
   return clean;
 }
 
@@ -311,8 +320,8 @@ class SceneAnalyzer {
   static const double defaultNmsIou = 0.45;
 
   /// Fotogramas consecutivos necesarios para confirmar un objeto nuevo.
-  /// 1 permite respuesta instantánea al enfocar un obstáculo.
-  static const int defaultConfirmFrames = 3;
+  /// 2 permite respuesta muy rápida (~150-200 ms) y descarta ruidos de 1 solo cuadro.
+  static const int defaultConfirmFrames = 2;
 
   double _minConf;
   final double _nmsIou;
@@ -325,13 +334,13 @@ class SceneAnalyzer {
   Set<String> _known = {};
 
   static const double _emaAlpha = 0.5;
-  static const double _matchIou = 0.3;
+  static const double _matchIou = 0.15;
   static const int _maxMissed = 5;
 
   /// Cooldown entre avisos repetidos del mismo peligro Alto (2.0 s).
   static const int _altoCooldown = 2000;
 
-  /// Cooldown mínimo al cambiar la escena antes de nuevo aviso por voz (1.2 s).
+  /// Cooldown mínimo al cambiar la escena antes de nuevo aviso por voz (1.8 s).
   static const int _changeCooldown = 1800;
 
   /// Intervalo máximo para refrescar la descripción si la escena sigue igual (6.5 s).
@@ -381,6 +390,8 @@ class SceneAnalyzer {
     final w = d.right - d.left;
     final h = d.bottom - d.top;
     if (w <= 0 || h <= 0) return false;
+    // Descarta falsos positivos de personas en franjas horizontales (bancos, mesas, sombras)
+    if (key == 'persona' && w > 1.6 * h) return false;
     final area = w * h;
     return area >= _minBoxArea && area <= _maxBoxArea;
   }
@@ -502,7 +513,9 @@ class SceneAnalyzer {
     if (nonObs) {
       advice = '';
     } else if (isHighRiskClass && level != 'lejos') {
-      advice = 'Detente y avanza con cuidado';
+      advice = key == 'peligro electrico'
+          ? 'Mantente alejado, no toques'
+          : 'Detente y avanza con cuidado';
     } else if (area > 0.60) {
       advice = 'Paso bloqueado. Detente';
     } else if (pos == 'centro') {

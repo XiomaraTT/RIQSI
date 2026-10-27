@@ -6,6 +6,7 @@ Lentes
 Mesa
 Mochila
 PC
+Peligro_Electrico
 Persona
 Puerta
 Silla

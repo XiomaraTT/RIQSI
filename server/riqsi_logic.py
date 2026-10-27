@@ -45,6 +45,7 @@ TRANSLATIONS = {
     "potted_plant": "planta", "sink": "lavamanos",
     "pc": "computadora", "tacho": "tacho", "barandas": "barandas",
     "llave": "llave", "billete": "billete", "lentes": "lentes",
+    "peligro_electrico": "peligro eléctrico", "peligro electrico": "peligro eléctrico",
 }
 
 ALIASES = {
@@ -52,6 +53,7 @@ ALIASES = {
     "computadora": "pc", "ordenador": "pc",
     "tachos": "tacho", "papelera": "tacho", "basurero": "tacho",
     "baranda": "barandas", "escalera": "escaleras",
+    "riesgo_electrico": "peligro_electrico", "riesgo electrico": "peligro_electrico",
 }
 
 # Plurales irregulares o que las reglas no resuelven bien.

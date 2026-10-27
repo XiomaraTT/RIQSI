@@ -17,6 +17,7 @@ Lentes
 Mesa
 Mochila
 PC
+Peligro_Electrico
 Persona
 Puerta
 Silla
@@ -35,19 +36,22 @@ SceneResult run(List<RawDetection> d, {SceneAnalyzer? a, int t = 0}) =>
 
 void main() {
   test('labels.txt se lee sin lineas vacias ni CRLF', () {
-    expect(labels.length, 13);
+    expect(labels.length, 14);
     expect(labels.first, 'Barandas');
     expect(labels.last, 'escaleras');
     expect(labels, contains('Persona'));
+    expect(labels, contains('Mochila'));
     expect(labels, contains('PC'));
     expect(labels, contains('Tacho'));
+    expect(labels, contains('Peligro_Electrico'));
     expect(parseLabels('\n  Silla \r\n\r\nMesa\n'), ['Silla', 'Mesa']);
   });
 
-  test('el archivo real assets/labels.txt tiene 13 clases', () async {
+  test('el archivo real assets/labels.txt tiene 14 clases', () async {
     TestWidgetsFlutterBinding.ensureInitialized();
     final loaded = await loadModelLabels();
     expect(loaded, labels);
+    expect(loaded.length, 14);
   });
 
   test('distancia siempre valida', () {
@@ -186,15 +190,21 @@ void main() {
     expect(rPc.description, contains('2 computadoras'));
   });
 
-  test('resolucion de clase por indice numerico', () {
-    // Clase 7 es PC, clase 11 es Tacho, clase 8 es Persona
-    final r = run([det('11', big, 0.8)]);
+  test('resolucion de clase por indice numerico y peligro electrico', () {
+    // Clase 7 es PC, clase 12 es Tacho, clase 8 es Peligro_Electrico
+    final r = run([det('12', big, 0.8)]);
     expect(r.top!.label, 'tacho');
     expect(r.top!.risk, 'Medio');
 
     final rPc = run([det('7', small, 0.8)]);
     expect(rPc.top!.label, 'pc');
     expect(rPc.top!.risk, 'Bajo');
+
+    final rPeligro = run([det('8', big, 0.85)]);
+    expect(rPeligro.top!.label, 'peligro electrico');
+    expect(rPeligro.top!.risk, 'Alto');
+    expect(rPeligro.description, contains('Peligro eléctrico muy cerca'));
+    expect(rPeligro.top!.advice, contains('Mantente alejado, no toques'));
   });
 
   test('objeto pequeno sin consejo', () {

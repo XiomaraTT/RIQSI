@@ -6,7 +6,7 @@ Riqsi es un asistente inteligente de visión del entorno para personas con disca
 
 ## ⚙️ Cómo funciona ahora
 
-Toda la detección corre **dentro del celular**, sin PC, sin servidor y sin Wi-Fi. La app incluye un modelo **YOLOv8 propio de 13 clases** (`assets/models/best.tflite`, clases en `assets/labels.txt`: Barandas, Billete, LLave, Laptop, Lentes, Mesa, Mochila, PC, Persona, Puerta, Silla, Tacho, escaleras) y lo ejecuta con el plugin oficial [`ultralytics_yolo`](https://pub.dev/packages/ultralytics_yolo). Solo el mapa y las rutas necesitan internet.
+Toda la detección corre **dentro del celular**, sin PC, sin servidor y sin Wi-Fi. La app incluye un modelo **YOLOv8 propio de 14 clases** (`assets/models/best.tflite`, clases en `assets/labels.txt`: Barandas, Billete, LLave, Laptop, Lentes, Mesa, Mochila, PC, Peligro_Electrico, Persona, Puerta, Silla, Tacho, escaleras) y lo ejecuta con el plugin oficial [`ultralytics_yolo`](https://pub.dev/packages/ultralytics_yolo). Solo el mapa y las rutas necesitan internet.
 
 ```
   Cámara del celular
